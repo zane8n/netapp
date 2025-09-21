@@ -72,6 +72,8 @@ ui::show_troubleshooting_tips() {
     echo "  1. Network Connectivity: Can you 'ping' the target devices manually from this machine?"
     echo "  2. Configuration: Are the subnets and communities correct? Run 'netsnmp --config' to verify."
     echo "  3. Firewalls: Is ICMP (ping) or SNMP (UDP port 161) being blocked by a firewall?"
+    echo -e "     ${C_YELLOW}→ If ICMP is blocked, you MUST use the SNMP-only scan mode.${C_RESET}"
+    echo "       Edit your config file and set: scan_mode=\"snmp\""
     echo "  4. Device SNMP: Is SNMP enabled on the target network devices themselves?"
     echo ""
     ui::print_info "Use the built-in diagnostic tools to help isolate the problem:"
@@ -94,6 +96,12 @@ ui::run_config_wizard() {
     local current_communities="${G_CONFIG[communities]}"
     read -rp "SNMP communities (e.g., public private): [${current_communities}]: " new_communities
     G_CONFIG[communities]="${new_communities:-$current_communities}"
+
+    local current_mode="${G_CONFIG[scan_mode]}"
+    read -rp "Scan mode (icmp/snmp): [${current_mode}]: " new_mode
+    if [[ "$new_mode" == "icmp" || "$new_mode" == "snmp" ]]; then
+        G_CONFIG[scan_mode]="${new_mode}"
+    fi
     
     echo ""
     core::save_config

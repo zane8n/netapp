@@ -37,17 +37,29 @@ scan::_find_live_hosts() {
     core::log_debug "Finding live hosts in ${network}..."
 
     if ! core::is_command_available "fping"; then
-        core::log_debug "fping not found, falling back to scanning all IPs individually."
+        # This fallback is for systems without fping, it's not a bug.
         scan::generate_ip_list "$network"
         return
     fi
     
-    # -a: show alive hosts, -g: generate from network, -q: quiet
-    # -i: interval between pings in ms (stealth), -t: timeout in ms
     local delay="${G_CONFIG[scan_delay]}"
     local timeout="${G_CONFIG[ping_timeout]}000"
     
-    fping -a -g "${network}" -q -i "${delay}" -t "${timeout}" 2>/dev/null
+    # Use -g with the correct syntax for CIDR vs. ranges
+    if [[ "${network}" == */* ]]; then
+        # fping handles CIDR directly
+        fping -a -g "${network}" -q -i "${delay}" -t "${timeout}" 2>/dev/null
+    elif [[ "${network}" == *-* ]]; then
+        # For ranges, we must provide start and end IPs
+        local base_ip end_range start_ip
+        base_ip="${network%-*}"; end_range="${network#*-}"
+        start_ip="${base_ip}"
+        end_ip="${base_ip%.*}.${end_range}"
+        fping -a -g "${start_ip}" "${end_ip}" -q -i "${delay}" -t "${timeout}" 2>/dev/null
+    else
+        # For single IPs, just run fping directly
+        fping -a "${network}" -q -i "${delay}" -t "${timeout}" 2>/dev/null
+    fi
 }
 
 
@@ -82,10 +94,28 @@ scan::parallel_snmp_query() {
     local workers="${G_CONFIG[scan_workers]}"
     local job_count=0
     
+    # Export the configuration array so sub-shells can read it.
+    export -A G_CONFIG
+
     # Read IPs from standard input
     while read -r ip; do
-        # Launch the task in the background
-        scan::_snmp_query_task "$ip" &
+        # Execute each task in a new, fully-sourced bash shell. This is the core fix.
+        # It ensures that all libraries and functions are available to the sub-process.
+        bash -c "
+            # Source the libraries to build the environment
+            source '${LIB_DIR}/core.sh'
+            source '${LIB_DIR}/discovery.sh'
+
+            # Execute the discovery function
+            result=\$(discovery::resolve_snmp_details '${ip}')
+            
+            # If successful, print the formatted result
+            if [[ -n \"\$result\" ]]; then
+                hostname=\$(echo \"\$result\" | cut -d'|' -f1)
+                serial=\$(echo \"\$result\" | cut -d'|' -f2)
+                echo \"${ip} \\\"\$hostname\\\" \\\"\$serial\\\"\"
+            fi
+        " &
         
         ((job_count++))
         # When the number of jobs reaches the worker limit, wait for any job to finish
@@ -103,50 +133,54 @@ scan::parallel_snmp_query() {
 
 # Orchestrates a full cache rebuild.
 scan::update_cache() {
-    local custom_networks="${1:-${G_CONFIG[subnets]}}"
-    local custom_communities="${2:-${G_CONFIG[communities]}}"
-
-    if [[ -z "$custom_networks" || -z "$custom_communities" ]]; then
-        core::log_error "Config incomplete. No networks or communities defined."; return 1;
-    fi
-    
     core::log "Starting network scan (mode: full rebuild)..."
-    core::log "  Networks:    ${custom_networks}"
-    core::log "  Workers:     ${G_CONFIG[scan_workers]}"
+    core::log "  Networks:    ${G_CONFIG[subnets]}"
+    core::log "  Scan Mode:   ${G_CONFIG[scan_mode]}"
 
     local temp_cache_file; temp_cache_file=$(mktemp)
     
-    G_CONFIG[subnets]="$custom_networks"
-    G_CONFIG[communities]="$custom_communities"
-    export G_CONFIG
+    # --- NEW: Branching logic based on scan_mode ---
+    if [[ "${G_CONFIG[scan_mode]}" == "snmp" ]]; then
+        # SNMP-only mode: skip ICMP, query all IPs directly.
+        local all_ips_file; all_ips_file=$(mktemp)
+        core::log "Phase 1: Generating full IP list for SNMP-only scan..."
+        for network in ${G_CONFIG[subnets]}; do
+            scan::generate_ip_list "${network}" >> "${all_ips_file}"
+        done
+        local total_ips; total_ips=$(wc -l < "$all_ips_file" | tr -d ' ')
+        core::log "Generated ${total_ips} IPs to query."
 
-    # Stage 1: Discover all live hosts across all networks
-    local live_hosts_file; live_hosts_file=$(mktemp)
-    core::log "Phase 1: Discovering live hosts via ICMP..."
-    for network in ${G_CONFIG[subnets]}; do
-        scan::_find_live_hosts "${network}" >> "${live_hosts_file}"
-    done
-    
-    local live_host_count; live_host_count=$(wc -l < "${live_hosts_file}")
-    core::log "Found ${live_host_count} potentially live hosts."
+        core::log "Phase 2: Querying SNMP on all generated IPs..."
+        < "${all_ips_file}" scan::parallel_snmp_query > "${temp_cache_file}"
+        rm "${all_ips_file}"
+    else
+        # ICMP mode (default): ping first, then query.
+        local live_hosts_file; live_hosts_file=$(mktemp)
+        core::log "Phase 1: Discovering live hosts via ICMP..."
+        for network in ${G_CONFIG[subnets]}; do
+            scan::_find_live_hosts "${network}" >> "${live_hosts_file}"
+        done
+        
+        local live_host_count; live_host_count=$(wc -l < "${live_hosts_file}" | tr -d ' ')
+        core::log "Found ${live_host_count} potentially live hosts."
 
-    # Stage 2: Query SNMP on live hosts in parallel
-    core::log "Phase 2: Querying SNMP on live hosts..."
-    if [[ ${live_host_count} -gt 0 ]]; then
-        < "${live_hosts_file}" scan::parallel_snmp_query > "${temp_cache_file}"
+        core::log "Phase 2: Querying SNMP on live hosts..."
+        if [[ ${live_host_count} -gt 0 ]]; then
+            < "${live_hosts_file}" scan::parallel_snmp_query > "${temp_cache_file}"
+        fi
+        rm "${live_hosts_file}"
     fi
     
-    rm "${live_hosts_file}"
     local total_found; total_found=$(wc -l < "${temp_cache_file}")
     
-    # Atomically replace the old cache with the new one
     mv "${temp_cache_file}" "${G_PATHS[hosts_cache]}"
     
     if [[ ${total_found} -gt 0 ]]; then
         core::log "Scan complete. Found ${total_found} devices with SNMP response."
         ui::print_success "Cache updated successfully."
     else
-        core::log_error "Scan complete. No devices responded to SNMP."; ui::show_troubleshooting_tips
+        core::log_error "Scan complete. No devices responded to SNMP."
+        ui::show_troubleshooting_tips
     fi
 }
 

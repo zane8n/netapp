@@ -51,7 +51,8 @@ core::load_config() {
         ["scan_workers"]="25"
         ["cache_ttl"]="3600"
         ["enable_logging"]="true"
-        ["scan_delay"]="20" # <-- NEW: Default 20ms delay
+        ["scan_delay"]="20"
+        ["scan_mode"]="icmp"
     )
 
     if [[ ! -f "${G_PATHS[config_file]}" ]]; then
