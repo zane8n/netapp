@@ -10,9 +10,24 @@ declare -A G_PATHS
 G_VERBOSE=false
 G_QUIET=false
 G_DEBUG=false
-VERSION="2.0.0"
+VERSION="2.1.3"
 
 # --- Initialization ---
+
+core::bootstrap() {
+    if [[ $EUID -eq 0 ]]; then
+        G_PATHS[conf_dir]="/etc/netsnmp"
+        G_PATHS[cache_dir]="/var/cache/netsnmp"
+        G_PATHS[log_file]="/var/log/netsnmp.log"
+    else
+        G_PATHS[conf_dir]="${HOME}/.config/netsnmp"
+        G_PATHS[cache_dir]="${HOME}/.cache/netsnmp"
+        G_PATHS[log_file]="${HOME}/.cache/netsnmp.log"
+    fi
+    G_PATHS[config_file]="${G_PATHS[conf_dir]}/netsnmp.conf"
+    G_PATHS[hosts_cache]="${G_PATHS[cache_dir]}/hosts.cache"
+    G_PATHS[ap_cache]="${G_PATHS[cache_dir]}/ap.cache"
+}
 
 core::init() {
     for arg in "$@"; do
@@ -22,7 +37,6 @@ core::init() {
             -vv|--debug) G_DEBUG=true; G_VERBOSE=true ;;
         esac
     done
-    core::setup_paths
     core::load_config
 }
 
