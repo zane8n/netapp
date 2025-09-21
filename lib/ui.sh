@@ -84,28 +84,37 @@ ui::show_troubleshooting_tips() {
 # --- Interactive Wizard ---
 
 ui::run_config_wizard() {
+    # It is critical that the wizard loads the most current config before editing.
+    core::load_config
+
     ui::print_header "NetSnmp Configuration Wizard"
     echo "Please provide the default values for your network scans."
-    echo "You can leave any prompt blank to keep the current value."
+    echo "You can leave any prompt blank to accept the current value shown in [brackets]."
     echo ""
 
     local current_subnets="${G_CONFIG[subnets]}"
-    read -rp "Networks to scan (e.g., 192.168.1.0/24 10.0.1.1-100): [${current_subnets}]: " new_subnets
+    read -rp "Networks to scan: [${current_subnets}]: " new_subnets
     G_CONFIG[subnets]="${new_subnets:-$current_subnets}"
 
     local current_communities="${G_CONFIG[communities]}"
-    read -rp "SNMP communities (e.g., public private): [${current_communities}]: " new_communities
+    read -rp "SNMP communities: [${current_communities}]: " new_communities
     G_CONFIG[communities]="${new_communities:-$current_communities}"
 
     local current_mode="${G_CONFIG[scan_mode]}"
     read -rp "Scan mode (icmp/snmp): [${current_mode}]: " new_mode
-    if [[ "$new_mode" == "icmp" || "$new_mode" == "snmp" ]]; then
-        G_CONFIG[scan_mode]="${new_mode}"
+    # This is the corrected, robust logic:
+    # 1. Use the new value, or fall back to the current one if input is empty.
+    G_CONFIG[scan_mode]="${new_mode:-$current_mode}"
+    # 2. Validate the result. If it's invalid, revert to the original value.
+    if [[ "${G_CONFIG[scan_mode]}" != "icmp" && "${G_CONFIG[scan_mode]}" != "snmp" ]]; then
+        ui::print_error "Invalid mode '${G_CONFIG[scan_mode]}'. Reverting to '${current_mode}'."
+        G_CONFIG[scan_mode]="${current_mode}"
     fi
     
     echo ""
     core::save_config
     ui::print_success "Configuration saved to: ${G_PATHS[config_file]}"
     echo ""
-    ui::print_info "You can now run 'netsnmp --update' to scan your network."
+    ui::print_info "Your selected scan mode is now: '${G_CONFIG[scan_mode]}'."
+    ui::print_info "You can now run 'netsnmp --update'."
 }
