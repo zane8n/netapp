@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# NetSnmp Library - Core Functions
+# NetSnmp Library - Core Function
 # Description: Handles configuration, logging, paths, and core utilities.
 #
 

@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# NetSnmp Library - Discovery Functions
+# NetSnmp Library - Discovery Function
 # Description: Handles all direct SNMP communication and data parsing.
 #
 

@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# NetSnmp Library - UI Functions
+# NetSnmp Library - UI Function
 # Description: Handles all user-facing output, like help, headers, and messages.
 #
 

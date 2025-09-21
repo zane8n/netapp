@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# NetSnmp Library - Cache Functions
+# NetSnmp Library - Cache Function
 # Description: Manages all cache operations like reading, writing, and searching.
 #
 

@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# NetSnmp Library - Scan Functions
+# NetSnmp Library - Scan Function
 # Description: Handles network scanning, IP generation, and host discovery.
 #
 

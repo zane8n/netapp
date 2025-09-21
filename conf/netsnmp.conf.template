@@ -1,0 +1,38 @@
+# NetSnmp Configuration File
+#
+# This file contains the default settings for network scans.
+# You can edit it directly or run 'netsnmp --wizard'.
+
+# Networks to scan (space-separated: CIDR, ranges, single IPs)
+# Example: 192.168.1.0/24 10.0.0.1-100 172.16.1.50
+subnets="192.168.1.0/24"
+
+# SNMP communities to try (space-separated)
+# Example: public private read-only
+communities="public"
+
+# Timeout for ping checks in seconds.
+ping_timeout="1"
+
+# Timeout for SNMP queries in seconds.
+snmp_timeout="2"
+
+# Number of parallel processes for scanning.
+# Default is 25. Higher values are faster but can increase network load.
+scan_workers="25"
+
+# Time-to-live for cache in seconds (e.g., 3600 = 1 hour).
+cache_ttl="3600"
+
+# Delay in milliseconds between pings to reduce network noise (0 to disable).
+# A value of 20-50 is recommended for stealth.
+scan_delay="20"
+
+# Enable logging to the log file (true/false).
+enable_logging="true"
+
+# --- Advanced Discovery ---
+
+# Space-separated list of neighbor discovery protocols to use.
+# Supported: cdp, lldp. Order matters (it will try them in this order).
+discovery_protocols="cdp lldp"
