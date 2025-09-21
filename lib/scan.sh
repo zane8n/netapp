@@ -182,6 +182,85 @@ scan::update_ap_cache() {
     ui::print_error "AP discovery feature is not yet fully implemented."
 }
 
+# --- Neighbor Discovery Orchestration ---
+
+# Task for a single switch discovery. Called by the parallel engine.
+# It tries all configured protocols (e.g., cdp, then lldp).
+scan::_discover_neighbors_task() {
+    local switch_ip="$1"
+    local switch_hostname="$2"
+    
+    local -a communities; read -r -a communities <<< "${G_CONFIG[communities]}"
+    local -a protocols; read -r -a protocols <<< "${G_CONFIG[discovery_protocols]}"
+    
+    for protocol in "${protocols[@]}"; do
+        for community in "${communities[@]}"; do
+            core::log_debug "Querying ${switch_hostname} (${switch_ip}) for neighbors via ${protocol}..."
+            
+            local results
+            if [[ "$protocol" == "cdp" ]]; then
+                results=$(discovery::get_cdp_neighbors "$switch_ip" "$community")
+            elif [[ "$protocol" == "lldp" ]]; then
+                results=$(discovery::get_lldp_neighbors "$switch_ip" "$community")
+            fi
+            
+            if [[ -n "$results" ]]; then
+                local timestamp; timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+                # Add switch info, protocol, and timestamp to each result line
+                while read -r line; do
+                    # Input format: IP|HOSTNAME|PLATFORM|PORT
+                    # Output format: IP "HOSTNAME" "PLATFORM" SWITCH_IP "PORT" PROTOCOL "TIMESTAMP"
+                    IFS='|' read -r ip host platform port <<< "$line"
+                    echo "$ip \"$host\" \"$platform\" $switch_ip \"$port\" $protocol \"$timestamp\""
+                done <<< "$results"
+                return 0 # Success, don't try other protocols/communities
+            fi
+        done
+    done
+}
+export -f scan::_discover_neighbors_task
+export -f discovery::get_cdp_neighbors
+export -f discovery::get_lldp_neighbors
+export -A G_CONFIG
+
+# Manages the parallel discovery process across all potential switches.
+scan::update_ap_cache() {
+    if [[ ! -s "${G_PATHS[hosts_cache]}" ]]; then
+        ui::print_error "Hosts cache is empty. Run 'netsnmp --update' first."; return 1;
+    fi
+
+    ui::print_header "Starting Neighbor Discovery Scan"
+    core::log "Protocols enabled: ${G_CONFIG[discovery_protocols]}"
+
+    local temp_ap_cache; temp_ap_cache=$(mktemp)
+    
+    # Use a parallel job manager to query all switches
+    local workers="${G_CONFIG[scan_workers]}"
+    local job_count=0
+    
+    # Read switches from the main host cache
+    while read -r switch_ip switch_hostname _; do
+        # Heuristic: A device with a serial number is likely a switch/router
+        # This avoids querying end-user PCs.
+        scan::_discover_neighbors_task "$switch_ip" "$switch_hostname" &>> "$temp_ap_cache" &
+        
+        ((job_count++))
+        if [[ ${job_count} -ge ${workers} ]]; then
+            wait -n; ((job_count--));
+        fi
+    done < <(grep -v '""' "${G_PATHS[hosts_cache]}") # Only query devices with a serial number
+    
+    wait
+    
+    local total_found; total_found=$(wc -l < "$temp_ap_cache" | tr -d ' ')
+    
+    # Atomically replace the old AP cache
+    mv "$temp_ap_cache" "${G_PATHS[ap_cache]}"
+    
+    ui::print_success "Discovery complete. Found ${total_found} neighbors."
+    ui::print_info "Cache updated: ${G_PATHS[ap_cache]}"
+    ui::print_info "View results with 'netsnmp --aps'."
+}
 # --- Standalone and Test Functions ---
 
 scan::scan_single_host() {

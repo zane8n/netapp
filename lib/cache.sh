@@ -160,3 +160,38 @@ cache::merge_updates() {
     core::log "Incremental scan merge complete."
     ui::print_success "Added ${new_count} new devices and updated ${updated_count} existing devices."
 }
+
+# --- AP Cache Functions ---
+
+# Searches and displays the AP/neighbor cache.
+# $1: The search pattern. If empty, lists all devices.
+cache::search_aps() {
+    local pattern="$1"
+    local cache_file="${G_PATHS[ap_cache]}"
+
+    if [[ ! -s "$cache_file" ]]; then
+        ui::print_error "Neighbor cache is empty. Run 'netsnmp --discover-aps' first."; return 1;
+    fi
+
+    local results;
+    if [[ -z "$pattern" ]]; then
+        results=$(cat "$cache_file")
+    else
+        results=$(grep -i "$pattern" "$cache_file")
+    fi
+    
+    local found_count; found_count=$(echo "$results" | wc -l | tr -d ' ')
+    if [[ ${found_count} -eq 0 ]]; then
+        ui::print_error "No neighbors found matching '${pattern}'."; return 1;
+    fi
+    
+    ui::print_header "Neighbor Discovery Results (${found_count} found)"
+    printf "%-18s %-30s %-18s %-25s %s\n" "NEIGHBOR IP" "HOSTNAME" "CONNECTED TO" "PORT" "PROTOCOL"
+    echo "------------------ ------------------------------ ------------------ ------------------------- --------"
+    
+    echo "$results" | while read -r ip host platform switch_ip port protocol timestamp; do
+        # Clean quotes for display
+        host="${host//\"/}"; port="${port//\"/}"
+        printf "%-18s %-30s %-18s %-25s %s\n" "$ip" "$host" "$switch_ip" "$port" "$protocol"
+    done
+}
