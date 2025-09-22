@@ -16,58 +16,29 @@ for lib_file in "${LIB_DIR}"/*.sh; do source "$lib_file"; done
 main() {
 
     core::bootstrap
-    # If no arguments are provided, initialize and perform the default action.
-    if [[ $# -eq 0 ]]; then
-        core::init "$@" # Now this just loads config and sets verbosity
-        if cache::is_valid; then
-            ui::print_info "All cached devices:"; cache::search "";
-        else
-            ui::show_help; ui::print_info "Run 'netsnmp --update' to begin.";
-        fi
-        return 0
-    fi
-    
-    
-    # --- Action-based Initialization ---
-    # Each command now initializes the environment itself, ensuring it's always fresh.
-    case "$1" in
-        -h|--help) ui::show_help; exit 0 ;;
-        --version) ui::show_version; exit 0 ;;
-        --uninstall) ui::show_uninstall_instructions; exit 0 ;;
-        
-        # The wizard handles its own initialization.
-        --wizard) ui::run_config_wizard; exit $? ;;
 
-        # All other commands initialize the core system first.
-        *)
-            core::init "$@"
-            local action="$1"; shift
-            case "$action" in
-                -u|--update) scan::update_cache ;;
-                --update-incremental) scan::update_cache_incremental ;;
-                -i|--info) cache::show_stats ;;
-                -c|--clear) cache::clear ;;
-                --config) core::show_config ;;
-                --discover-aps) scan::update_ap_cache ;;
-                --aps) cache::search_aps "$1" ;;
-                --test-scan) scan::test_functionality ;;
-                --test-snmp) discovery::test_snmp_connectivity "$1" ;;
-                --test-ips) scan::test_ip_generation "$1" ;;
-                -q|--quiet|-v|--verbose|-vv|--debug)
-                    # Verbosity flags are handled by init, so if one is found,
-                    # re-run the logic on the next argument.
-                    main "$@"
-                    ;;
-                -*)
-                    ui::print_error "Unknown option: $action"; ui::show_help; exit 1
-                    ;;
-                *)
-                    # Default action is a search.
-                    cache::search "$action"
-                    ;;
-            esac
-            exit $?
-            ;;
+    core::check_config_context "$@"
+ # STAGE 3: Parse all arguments in a single loop.
+    local ACTION="search"; local SEARCH_PATTERN=""; local ACTION_PARAM=""
+    # (The rest of the argument parsing logic is unchanged)
+# ... (The entire rest of the main function remains the same as version 2.1.4)
+    if [[ $# -eq 0 ]]; then ACTION="default"; else
+        while [[ $# -gt 0 ]]; do
+            case "$1" in
+                -h|--help) ACTION="help"; break ;; -v|--verbose) G_VERBOSE=true; shift ;; -vv|--debug) G_DEBUG=true; G_VERBOSE=true; set -x; shift ;; -q|--quiet) G_QUIET=true; shift ;;
+                -u|--update) ACTION="update"; shift ;; --update-incremental) ACTION="update_incremental"; shift ;; -i|--info) ACTION="info"; shift ;;
+                -c|--clear) ACTION="clear"; shift ;; --config) ACTION="config"; shift ;; --wizard) ACTION="wizard"; break ;; --discover-aps) ACTION="discover_aps"; shift ;;
+                --aps) ACTION="aps"; ACTION_PARAM="$2"; shift 2 ;; --version) ACTION="version"; break ;; --uninstall) ACTION="uninstall"; break ;; --test-scan) ACTION="test_scan"; shift ;;
+                --test-snmp) ACTION="test_snmp"; ACTION_PARAM="$2"; shift 2 ;; --test-ips) ACTION="test_ips"; ACTION_PARAM="$2"; shift 2 ;;
+                -*) ui::print_error "Unknown option: $1"; ACTION="help"; break ;; *) SEARCH_PATTERN="$1"; shift ;;
+            esac; done; fi
+    core::init
+    case "$ACTION" in
+        help) ui::show_help ;; version) ui::show_version ;; uninstall) ui::show_uninstall_instructions ;; wizard) ui::run_config_wizard ;; update) scan::update_cache ;;
+        update_incremental) scan::update_cache_incremental ;; info) cache::show_stats ;; clear) cache::clear ;; config) core::show_config ;;
+        discover_aps) scan::update_ap_cache ;; aps) cache::search_aps "$ACTION_PARAM" ;; test_scan) scan::test_functionality ;;
+        test_snmp) discovery::test_snmp_connectivity "$ACTION_PARAM" ;; test_ips) scan::test_ip_generation "$ACTION_PARAM" ;; search) cache::search "$SEARCH_PATTERN" ;;
+        default) if cache::is_valid; then ui::print_info "All cached devices:"; cache::search ""; else ui::show_help; ui::print_info "Run 'netsnmp --update' to begin."; fi ;;
     esac
 }
 

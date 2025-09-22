@@ -195,3 +195,17 @@ cache::search_aps() {
         printf "%-18s %-30s %-18s %-25s %s\n" "$ip" "$host" "$switch_ip" "$port" "$protocol"
     done
 }
+core::check_config_context() {
+    local system_config="/etc/netsnmp/netsnmp.conf"
+    
+    # This logic triggers if:
+    # 1. The user is NOT root ($EUID is not 0).
+    # 2. A system-wide configuration file EXISTS.
+    # 3. The user does NOT have their own local config file to override it.
+    if [[ $EUID -ne 0 && -f "$system_config" && ! -f "${G_PATHS[config_file]}" ]]; then
+        local original_command="netsnmp $*"
+        ui::print_warning_box "A system-wide configuration was found. This means the tool was likely installed or configured using 'sudo'. To use that configuration, you must also run your command with 'sudo'.\n\n  Example: sudo ${original_command}\n"
+        # Exit gracefully. Do not allow the script to continue with the wrong defaults.
+        exit 1
+    fi
+}

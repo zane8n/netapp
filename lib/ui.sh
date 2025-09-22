@@ -118,3 +118,12 @@ ui::run_config_wizard() {
     ui::print_info "Your selected scan mode is now: '${G_CONFIG[scan_mode]}'."
     ui::print_info "You can now run 'netsnmp --update'."
 }
+
+ui::print_warning_box() {
+    local message="$1"
+    echo -e "${C_YELLOW}================================ WARNING ================================"
+    echo -e "${C_RESET}"
+    # Use printf for better word wrapping
+    printf "  %s\n" "$message"
+    echo -e "${C_YELLOW}======================================================================${C_RESET}"
+}
