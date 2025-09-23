@@ -93,27 +93,29 @@ export -A G_CONFIG
 scan::parallel_snmp_query() {
     local workers="${G_CONFIG[scan_workers]}"
     local job_count=0
-    
-    # Get the community string ONCE before the loop.
-    local community_string="${G_CONFIG[communities]}"
 
     while read -r ip; do
-        # Execute each task in a new, fully-sourced bash shell.
-        # Pass the IP and community string as direct, foolproof arguments ($1, $2).
+        # Each worker is now a self-sufficient program.
         bash -c '
-            # Source the libraries to build the environment
+            # Step 1: Source the libraries to get the functions.
             source "${LIB_DIR}/core.sh"
             source "${LIB_DIR}/discovery.sh"
 
-            # Call the discovery function with the arguments passed to this shell
-            result=$(discovery::resolve_snmp_details "$1" "$2")
+            # Step 2: Initialize the environment. This loads the user config file.
+            core::bootstrap
+            core::init
+
+            # Step 3: Execute the discovery function for the given IP ($1).
+            # It will now use the correct G_CONFIG values loaded by core::init.
+            result=$(discovery::resolve_snmp_details "$1")
             
+            # Step 4: Format and print the output if successful.
             if [[ -n "$result" ]]; then
                 hostname=$(echo "$result" | cut -d"|" -f1)
                 serial=$(echo "$result" | cut -d"|" -f2)
                 echo "$1 \"$hostname\" \"$serial\""
             fi
-        ' _ "$ip" "$community_string" & # The "_" is a placeholder for $0
+        ' _ "$ip" & # Pass the IP as an argument ($1) to the sub-shell.
         
         ((job_count++))
         if [[ ${job_count} -ge ${workers} ]]; then

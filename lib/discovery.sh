@@ -15,44 +15,48 @@
 # Returns: A pipe-separated string "HOSTNAME|SERIAL" on success, empty on failure.
 discovery::resolve_snmp_details() {
     local ip="$1"
-    local communities_str="$2" # Takes communities as a direct argument
+    local communities_str="${G_CONFIG[communities]}"
     local -a communities
     read -r -a communities <<< "$communities_str"
 
-    local hostname=""
-    local successful_community=""
+    # OIDs to query in a single, efficient request
+    local sysname_oid="1.3.6.1.2.1.1.5.0"
+    local -a serial_oids=(
+        "1.3.6.1.2.1.47.1.1.1.1.11.1"    # entPhysicalSerialNum
+        "1.3.6.1.4.1.9.3.6.3.0"          # Cisco Product Serial
+    )
+    local all_oids="${sysname_oid} ${serial_oids[*]}"
 
-    # --- Step 1: Find the hostname and a working community string ---
     for community in "${communities[@]}"; do
-        core::log_debug "Querying Hostname for IP ${ip} with community '${community}'"
-        hostname=$(snmpget -v2c -c "${community}" -OQv -t "${G_CONFIG[snmp_timeout]}" -r 1 "${ip}" sysName.0 2>/dev/null)
-        if [[ $? -eq 0 && -n "$hostname" ]]; then
-            successful_community="$community"
-            break # Found a working community, stop trying
+        core::log_debug "Querying IP ${ip} with community '${community}'"
+        local response
+        response=$(snmpget -v2c -c "${community}" -OQ -t "${G_CONFIG[snmp_timeout]}" -r 1 "${ip}" ${all_oids} 2>/dev/null)
+        
+        if [[ $? -eq 0 && -n "$response" ]]; then
+            local hostname=""; local serial=""
+            while read -r line; do
+                if [[ -z "$hostname" && "$line" == *"${sysname_oid}"* ]]; then
+                    hostname=$(echo "$line" | cut -d' ' -f2- | sed 's/"//g')
+                fi
+                if [[ -z "$serial" && ! "$line" =~ "No Such" ]]; then
+                    for oid in "${serial_oids[@]}"; do
+                        if [[ "$line" == *"$oid"* ]]; then
+                            serial=$(echo "$line" | cut -d' ' -f2- | sed 's/"//g'); break;
+                        fi
+                    done
+                fi
+            done <<< "$response"
+
+            if [[ -n "$hostname" ]]; then
+                core::log_debug "Success for ${ip}: Host=${hostname}, Serial=${serial:-N/A}"
+                echo "${hostname}|${serial}"
+                return 0
+            fi
         fi
     done
 
-    # If we couldn't even get a hostname, fail immediately.
-    if [[ -z "$hostname" ]]; then
-        core::log_debug "No valid Hostname response from ${ip}."
-        return 1
-    fi
-
-    # --- Step 2: If hostname was found, now look for a serial number ---
-    local serial=""
-    local -a serial_oids=(
-        "1.3.6.1.2.1.47.1.1.1.1.11.1"    # entPhysicalSerialNum (Standard)
-        "1.3.6.1.4.1.9.3.6.3.0"          # Cisco Product Serial
-        "1.3.6.1.4.1.9.5.1.2.19.0"       # Cisco Chassis Serial (Older)
-        "1.3.6.1.4.1.11.2.36.1.1.2.9.0"  # Cisco Chassis Serial
-    )
-    
-    # Use the community we already know works
-    serial=$(snmpget -v2c -c "${successful_community}" -OQv -t "${G_CONFIG[snmp_timeout]}" -r 1 "${ip}" "${serial_oids[@]}" 2>/dev/null | grep -v "No Such" | head -n 1)
-
-    core::log_debug "Success for ${ip}: Host=${hostname}, Serial=${serial:-N/A}"
-    echo "${hostname}|${serial}"
-    return 0
+    core::log_debug "No valid SNMP response from ${ip} with any community."
+    return 1
 }
 
 
