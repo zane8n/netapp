@@ -29,7 +29,6 @@ load_config() {
     done
 
     if [[ ! -f "$CONFIG_FILE" ]]; then
-        # If running interactively, prompt for wizard. Otherwise, use defaults.
         if [[ -t 1 ]]; then
             log_error "Configuration file not found at '$CONFIG_FILE'."
             log_info "Please create it or run 'sudo netsnmp --wizard'."
@@ -37,21 +36,22 @@ load_config() {
         return 1
     fi
 
-    # Read the config file line by line
-    while IFS='=' read -r key value; do
-        # Skip comments and empty lines
-        [[ $key =~ ^\s*# ]] || [[ -z $key ]] && continue
+    # Process only valid, non-commented lines from the config file
+    while IFS= read -r line; do
+        # Use cut to safely separate key and value
+        local key
+        key=$(echo "$line" | cut -d '=' -f 1 | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+        local value
+        value=$(echo "$line" | cut -d '=' -f 2- | sed -e 's/^[[:space:]]*//;s/[[:space:]]*$//' -e 's/^"//' -e 's/"$//')
 
-        # Trim whitespace and remove quotes from key and value
-        key=$(echo "$key" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-        value=$(echo "$value" | sed -e 's/^[[:space:]]*//;s/[[:space:]]*$//' -e 's/^"//' -e 's/"$//')
-
-        # Store in config array if the key is valid
-        if [[ -n "${DEFAULT_CONFIG[$key]}" ]]; then
+        # Store in config array only if the key is a valid/known setting
+        if [[ -n "$key" && -v "DEFAULT_CONFIG[$key]" ]]; then
             CONFIG["$key"]="$value"
+            log_debug "Config loaded: [$key] = [${CONFIG[$key]}]"
         fi
-    done < "$CONFIG_FILE"
-    log_debug "Configuration loaded successfully."
+    done < <(grep -v '^\s*#' "$CONFIG_FILE" | grep '=') # Read from a process substitution that pre-filters the file
+
+    log_debug "Configuration loading complete."
 }
 
 # Saves the current CONFIG array back to the configuration file.

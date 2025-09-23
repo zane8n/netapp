@@ -1,65 +1,85 @@
-#!/bin/bash
-#
-# NetSnmp v2.1 - Network Discovery Tool
-#
-# This is the main executable. It sources libraries, parses arguments,
-# and dispatches actions to the appropriate functions.
-
-VERSION="2.1.0-hotfix"
-
-# --- Setup Environment ---
-SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)
-LIB_DIR="/usr/local/lib/netsnmp"
-
-CONF_DIR="/etc/netsnmp"
-CACHE_DIR="/var/cache/netsnmp"
-LOG_DIR="/var/log"
-
-CONFIG_FILE="${CONF_DIR}/netsnmp.conf"
-CACHE_FILE="${CACHE_DIR}/netsnmp.cache"
-AP_CACHE_FILE="${CACHE_DIR}/netsnmp.aps.cache"
-LOG_FILE="${LOG_DIR}/netsnmp.log"
-
-# --- Source Libraries ---
-if [[ ! -d "$LIB_DIR" ]]; then
-    echo "ERROR: Library directory not found at '$LIB_DIR'." >&2
-    echo "Please ensure NetSnmp is installed correctly." >&2
-    exit 1
-fi
-
-for lib in "$LIB_DIR"/*.sh; do
-    # shellcheck source=/dev/null
-    source "$lib"
-done
-
+# In /usr/local/bin/netsnmp
 
 # --- Main Logic ---
 main() {
     set -o pipefail
-    
-    # Load configuration first, so it's available for all actions
-    # We load it early so the user sees errors if the config is missing.
-    load_config
 
-    # --- Argument Parsing ---
+    # --- Robust Argument Parsing Loop ---
+    # REFACTOR: This loop correctly handles flags and options, solving the bug
+    # where '-v' was treated as a network.
+    local ACTION=""
+    local PATTERN=""
+    local CUSTOM_NETWORKS=""
+    local CUSTOM_COMMUNITIES=""
+    local TEST_IP=""
+
+    # If no args are given, default to help
     if [[ $# -eq 0 ]]; then
         show_help
         exit 0
     fi
 
-    local ACTION="$1"
-    local PATTERN=""
+    # First, find the main action (the first non-flag argument)
+    for arg in "$@"; do
+        if [[ ! "$arg" =~ ^- ]]; then
+            ACTION="$arg"
+            break
+        fi
+    done
 
-    # Handle search as the default action if the first arg is not a flag
-    if [[ ! "$ACTION" =~ ^- ]]; then
-        PATTERN="$ACTION"
-        ACTION="search"
-        shift # Consume the pattern argument
-    else
-        shift # Consume the action/flag argument
+    # If no action is found, it must be a command like --update.
+    # The first argument is the most likely candidate.
+    if [[ -z "$ACTION" ]]; then
+        ACTION="$1"
     fi
+    # If the action is not a known command, assume it's a search pattern.
+    case "$ACTION" in
+        --update|--discover-aps|--info|-i|--clear|-c|--wizard|--config|--help|-h|--version|--test-snmp)
+            # This is a valid command, do nothing.
+            ;;
+        *)
+            PATTERN="$ACTION"
+            ACTION="search"
+            ;;
+    esac
 
-    # Check for root privileges on actions that require them
+    # Now, parse all arguments for flags and options
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -S|--networks)
+                CUSTOM_NETWORKS="$2"
+                shift 2
+                ;;
+            -C|--communities)
+                CUSTOM_COMMUNITIES="$2"
+                shift 2
+                ;;
+            --test-snmp)
+                TEST_IP="$2"
+                shift 2
+                ;;
+            -v|--verbose)
+                VERBOSE="true"
+                shift
+                ;;
+            -vv|--debug)
+                DEBUG="true"
+                VERBOSE="true"
+                set -x # Enable shell tracing
+                shift
+                ;;
+            *)
+                shift # Ignore known commands or the search pattern
+                ;;
+        esac
+    done
+
+    # --- Action Dispatch ---
+    
+    # Load config after parsing args so debug flags are set.
+    load_config
+
+    # Check for root privileges on actions that need it.
     case "$ACTION" in
         --update|--wizard|--discover-aps|--clear)
             if [[ $EUID -ne 0 ]]; then
@@ -69,50 +89,31 @@ main() {
             ;;
     esac
 
-    QUIET="false"
-    DEBUG="false"
-
     case "$ACTION" in
         --update)
-            update_cache "$@" # Pass remaining args for custom networks/communities
-            ;;
-        --discover-aps)
-            update_ap_cache
+            # Pass custom networks if they were provided, otherwise the function will use the config.
+            update_cache "$CUSTOM_NETWORKS" "$CUSTOM_COMMUNITIES"
             ;;
         search)
-            if [[ -z "$PATTERN" ]]; then
-                log_error "Please provide a pattern to search for."
-                exit 1
-            fi
             search_cache "$PATTERN"
             ;;
-        -i|--info)
-            show_info
+        --test-snmp)
+            test_snmp "$TEST_IP"
             ;;
-        -c|--clear)
-            clear_cache
-            ;;
-        --wizard)
-            run_config_wizard
-            ;;
-        --config)
+        --config|--conf) # Added --conf as an alias
             show_config
             ;;
-        -h|--help)
-            show_help
-            ;;
-        --version)
-            echo "NetSnmp v${VERSION}"
-            ;;
-        --test-snmp)
-            test_snmp "$1" # Pass the IP address to the function
-            ;;
+        # --- Other cases remain the same ---
+        --discover-aps) update_ap_cache ;;
+        -i|--info) show_info ;;
+        -c|--clear) clear_cache ;;
+        --wizard) run_config_wizard ;;
+        -h|--help) show_help ;;
+        --version) echo "NetSnmp v${VERSION}" ;;
         *)
-            log_error "Unknown command or option: $ACTION"
+            log_error "Unknown command or pattern: $ACTION"
             show_help
             exit 1
             ;;
     esac
 }
-
-main "$@"
