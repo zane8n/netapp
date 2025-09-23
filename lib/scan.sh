@@ -37,28 +37,28 @@ scan::_find_live_hosts() {
     core::log_debug "Finding live hosts in ${network}..."
 
     if ! core::is_command_available "fping"; then
-        # This fallback is for systems without fping, it's not a bug.
-        scan::generate_ip_list "$network"
-        return
+        scan::generate_ip_list "$network"; return;
     fi
     
+    local fping_cmd="fping"
+    # Elevate fping if we are not root but can use sudo without a password
+    if [[ $EUID -ne 0 ]] && command -v sudo >/dev/null && sudo -n true 2>/dev/null; then
+        core::log_debug "Attempting to use sudo for fping for better permissions."
+        fping_cmd="sudo -n fping"
+    fi
+
     local delay="${G_CONFIG[scan_delay]}"
     local timeout="${G_CONFIG[ping_timeout]}000"
     
-    # Use -g with the correct syntax for CIDR vs. ranges
     if [[ "${network}" == */* ]]; then
-        # fping handles CIDR directly
-        fping -a -g "${network}" -q -i "${delay}" -t "${timeout}" 2>/dev/null
+        $fping_cmd -a -g "${network}" -q -i "${delay}" -t "${timeout}" 2>/dev/null
     elif [[ "${network}" == *-* ]]; then
-        # For ranges, we must provide start and end IPs
-        local base_ip end_range start_ip
+        local base_ip end_range start_ip end_ip
         base_ip="${network%-*}"; end_range="${network#*-}"
-        start_ip="${base_ip}"
-        end_ip="${base_ip%.*}.${end_range}"
-        fping -a -g "${start_ip}" "${end_ip}" -q -i "${delay}" -t "${timeout}" 2>/dev/null
+        start_ip="${base_ip}"; end_ip="${base_ip%.*}.${end_range}"
+        $fping_cmd -a -g "${start_ip}" "${end_ip}" -q -i "${delay}" -t "${timeout}" 2>/dev/null
     else
-        # For single IPs, just run fping directly
-        fping -a "${network}" -q -i "${delay}" -t "${timeout}" 2>/dev/null
+        $fping_cmd -a "${network}" -q -i "${delay}" -t "${timeout}" 2>/dev/null
     fi
 }
 
@@ -94,38 +94,32 @@ scan::parallel_snmp_query() {
     local workers="${G_CONFIG[scan_workers]}"
     local job_count=0
     
-    # Export the configuration array so sub-shells can read it.
-    export -A G_CONFIG
+    # Get the community string ONCE before the loop.
+    local community_string="${G_CONFIG[communities]}"
 
-    # Read IPs from standard input
     while read -r ip; do
-        # Execute each task in a new, fully-sourced bash shell. This is the core fix.
-        # It ensures that all libraries and functions are available to the sub-process.
-        bash -c "
+        # Execute each task in a new, fully-sourced bash shell.
+        # Pass the IP and community string as direct, foolproof arguments ($1, $2).
+        bash -c '
             # Source the libraries to build the environment
-            source '${LIB_DIR}/core.sh'
-            source '${LIB_DIR}/discovery.sh'
+            source "${LIB_DIR}/core.sh"
+            source "${LIB_DIR}/discovery.sh"
 
-            # Execute the discovery function
-            result=\$(discovery::resolve_snmp_details '${ip}')
+            # Call the discovery function with the arguments passed to this shell
+            result=$(discovery::resolve_snmp_details "$1" "$2")
             
-            # If successful, print the formatted result
-            if [[ -n \"\$result\" ]]; then
-                hostname=\$(echo \"\$result\" | cut -d'|' -f1)
-                serial=\$(echo \"\$result\" | cut -d'|' -f2)
-                echo \"${ip} \\\"\$hostname\\\" \\\"\$serial\\\"\"
+            if [[ -n "$result" ]]; then
+                hostname=$(echo "$result" | cut -d"|" -f1)
+                serial=$(echo "$result" | cut -d"|" -f2)
+                echo "$1 \"$hostname\" \"$serial\""
             fi
-        " &
+        ' _ "$ip" "$community_string" & # The "_" is a placeholder for $0
         
         ((job_count++))
-        # When the number of jobs reaches the worker limit, wait for any job to finish
         if [[ ${job_count} -ge ${workers} ]]; then
-            wait -n # Waits for the next job to terminate
-            ((job_count--))
+            wait -n; ((job_count--));
         fi
     done
-    
-    # Wait for all remaining background jobs to complete
     wait
 }
 
