@@ -4,30 +4,10 @@
 # Description: Installs the NetSnmp tool and its components system-wide or for a user.
 #
 
-set -e
-set -o pipefail
-
-# --- Configuration ---
-PREFIX_SYSTEM="/usr/local"
-PREFIX_USER="${HOME}/.local"
-
-declare -A PATHS_SYSTEM=(
-    [bin]="${PREFIX_SYSTEM}/bin"
-    [lib]="${PREFIX_SYSTEM}/lib/netsnmp"
-    [conf_dir]="/etc/netsnmp"
-    [cache_dir]="/var/cache/netsnmp"
-    [log_file]="/var/log/netsnmp.log"
-    [man_dir]="${PREFIX_SYSTEM}/share/man/man1"
-)
-
-declare -A PATHS_USER=(
-    [bin]="${PREFIX_USER}/bin"
-    [lib]="${PREFIX_USER}/lib/netsnmp"
-    [conf_dir]="${HOME}/.config/netsnmp"
-    [cache_dir]="${HOME}/.cache/netsnmp"
-    [log_file]="${HOME}/.cache/netsnmp.log"
-    [man_dir]="${PREFIX_USER}/share/man/man1"
-)
+set -e; set -o pipefail
+PREFIX_SYSTEM="/usr/local"; PREFIX_USER="${HOME}/.local"
+PATHS_SYSTEM=( [bin]="${PREFIX_SYSTEM}/bin" [lib]="${PREFIX_SYSTEM}/lib/netsnmp" [conf_dir]="/etc/netsnmp" [cache_dir]="/var/cache/netsnmp" [log_file]="/var/log/netsnmp.log" [man_dir]="${PREFIX_SYSTEM}/share/man/man1" )
+PATHS_USER=( [bin]="${PREFIX_USER}/bin" [lib]="${PREFIX_USER}/lib/netsnmp" [conf_dir]="${HOME}/.config/netsnmp" [cache_dir]="${HOME}/.cache/netsnmp" [log_file]="${HOME}/.cache/netsnmp.log" [man_dir]="${PREFIX_USER}/share/man/man1" )
 
 readonly SCRIPT_FILES=("netsnmp" "uninstall.sh"); readonly LIB_FILES=("lib/core.sh" "lib/scan.sh" "lib/cache.sh" "lib/discovery.sh" "lib/ui.sh" "lib/worker.sh")
 readonly CONFIG_TEMPLATE="conf/netsnmp.conf.template"; readonly MAN_PAGE="man/netsnmp.1"
