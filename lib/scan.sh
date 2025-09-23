@@ -1,184 +1,72 @@
 #!/bin/bash
 #
-# NetSnmp Library - Scan Function
-# Description: Handles network scanning, IP generation, and host discovery.
+# NetSnmp Library - Scan Functions
 #
 
-# --- IP Generation ---
-
 scan::generate_ip_list() {
-    local network_string="$1"
-    core::log_debug "Generating IP list for: ${network_string}"
-    
+    local network_string="$1"; core::log_debug "Generating IP list for: ${network_string}"
     if [[ "${network_string}" == */24 ]]; then
-        local base_ip
-        base_ip=$(echo "${network_string}" | cut -d'/' -f1 | sed 's/\.[0-9]*$//')
-        for i in {1..254}; do echo "${base_ip}.${i}"; done
+        local base_ip; base_ip=$(echo "${network_string}" | cut -d'/' -f1 | sed 's/\.[0-9]*$//'); for i in {1..254}; do echo "${base_ip}.${i}"; done
     elif [[ "${network_string}" == *-* ]]; then
-        local base_ip end_range start_octet base_network
-        base_ip="${network_string%-*}"; end_range="${network_string#*-}"
-        start_octet="${base_ip##*.}"; base_network="${base_ip%.*}"
-        if ! [[ "${start_octet}" =~ ^[0-9]+$ && "${end_range}" =~ ^[0-9]+$ && ${start_octet} -le ${end_range} && ${end_range} -le 254 ]]; then
-            core::log_error "Invalid IP range format: ${network_string}"; return 1
-        fi
+        local base_ip end_range start_octet base_network; base_ip="${network_string%-*}"; end_range="${network_string#*-}"; start_octet="${base_ip##*.}"; base_network="${base_ip%.*}"
+        if ! [[ "${start_octet}" =~ ^[0-9]+$ && "${end_range}" =~ ^[0-9]+$ && ${start_octet} -le ${end_range} && ${end_range} -le 254 ]]; then core::log_error "Invalid IP range: ${network_string}"; return 1; fi
         seq "${start_octet}" "${end_range}" | while read -r i; do echo "${base_network}.${i}"; done
-    elif [[ "${network_string}" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
-        echo "${network_string}"
-    else
-        core::log_error "Unsupported network format: ${network_string}"; return 1
-    fi
+    elif [[ "${network_string}" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then echo "${network_string}";
+    else core::log_error "Unsupported network format: ${network_string}"; return 1; fi
 }
 
-# --- Host Scanning ---
-
-# Efficiently finds live hosts in a network using fping.
 scan::_find_live_hosts() {
-    local network="$1"
-    core::log_debug "Finding live hosts in ${network}..."
-
-    if ! core::is_command_available "fping"; then
-        scan::generate_ip_list "$network"; return;
-    fi
-    
-    local fping_cmd="fping"
-    # Elevate fping if we are not root but can use sudo without a password
-    if [[ $EUID -ne 0 ]] && command -v sudo >/dev/null && sudo -n true 2>/dev/null; then
-        core::log_debug "Attempting to use sudo for fping for better permissions."
-        fping_cmd="sudo -n fping"
-    fi
-
-    local delay="${G_CONFIG[scan_delay]}"
-    local timeout="${G_CONFIG[ping_timeout]}000"
-    
-    if [[ "${network}" == */* ]]; then
-        $fping_cmd -a -g "${network}" -q -i "${delay}" -t "${timeout}" 2>/dev/null
-    elif [[ "${network}" == *-* ]]; then
-        local base_ip end_range start_ip end_ip
-        base_ip="${network%-*}"; end_range="${network#*-}"
-        start_ip="${base_ip}"; end_ip="${base_ip%.*}.${end_range}"
-        $fping_cmd -a -g "${start_ip}" "${end_ip}" -q -i "${delay}" -t "${timeout}" 2>/dev/null
-    else
-        $fping_cmd -a "${network}" -q -i "${delay}" -t "${timeout}" 2>/dev/null
-    fi
+    local network="$1"; core::log_debug "Finding live hosts in ${network}..."; if ! core::is_command_available "fping"; then scan::generate_ip_list "$network"; return; fi
+    local fping_cmd="fping"; if [[ $EUID -ne 0 ]] && command -v sudo >/dev/null && sudo -n true 2>/dev/null; then core::log_debug "Using sudo for fping."; fping_cmd="sudo -n fping"; fi
+    local delay="${G_CONFIG[scan_delay]}"; local timeout="${G_CONFIG[ping_timeout]}000"
+    if [[ "${network}" == */* ]]; then $fping_cmd -a -g "${network}" -q -i "${delay}" -t "${timeout}" 2>/dev/null;
+    elif [[ "${network}" == *-* ]]; then local base_ip end_range start_ip end_ip; base_ip="${network%-*}"; end_range="${network#*-}"; start_ip="${base_ip}"; end_ip="${base_ip%.*}.${end_range}"; $fping_cmd -a -g "${start_ip}" "${end_ip}" -q -i "${delay}" -t "${timeout}" 2>/dev/null;
+    else $fping_cmd -a "${network}" -q -i "${delay}" -t "${timeout}" 2>/dev/null; fi
 }
 
-
-# Task for a single SNMP query. Called by the parallel engine.
-scan::_snmp_query_task() {
-    local ip="$1"
-    core::log_debug "Querying SNMP for IP: $ip"
-    
-    # This now calls the optimized multi-OID query function
-    local result
-    result=$(discovery::resolve_snmp_details "$ip")
-    
-    if [[ -n "$result" ]]; then
-        # Result format is "HOSTNAME|SERIAL"
-        local hostname serial
-        hostname=$(echo "$result" | cut -d'|' -f1)
-        serial=$(echo "$result" | cut -d'|' -f2)
-        echo "$ip \"$hostname\" \"$serial\""
-    fi
-}
-# Export the task and dependencies for sub-shells
-export -f scan::_snmp_query_task
-export -f discovery::resolve_snmp_details
-export -f core::log_debug
-export -A G_CONFIG
-
-# --- Parallel Scan Engine ---
-
-# A robust, pure Bash parallel job manager.
-# Feeds a list of IPs to the SNMP query task.
+# --- THE NEW, ROBUST PARALLEL ENGINE ---
 scan::parallel_snmp_query() {
     local workers="${G_CONFIG[scan_workers]}"
-    local job_count=0
+    local worker_script="${LIB_DIR}/worker.sh"
+    
+    if [[ ! -x "$worker_script" ]]; then
+        core::log_error "Worker script is not executable: ${worker_script}"
+        return 1
+    fi
 
-    while read -r ip; do
-        # Each worker is now a self-sufficient program.
-        bash -c '
-            # Step 1: Source the libraries to get the functions.
-            source "${LIB_DIR}/core.sh"
-            source "${LIB_DIR}/discovery.sh"
-
-            # Step 2: Initialize the environment. This loads the user config file.
-            core::bootstrap
-            core::init
-
-            # Step 3: Execute the discovery function for the given IP ($1).
-            # It will now use the correct G_CONFIG values loaded by core::init.
-            result=$(discovery::resolve_snmp_details "$1")
-            
-            # Step 4: Format and print the output if successful.
-            if [[ -n "$result" ]]; then
-                hostname=$(echo "$result" | cut -d"|" -f1)
-                serial=$(echo "$result" | cut -d"|" -f2)
-                echo "$1 \"$hostname\" \"$serial\""
-            fi
-        ' _ "$ip" & # Pass the IP as an argument ($1) to the sub-shell.
-        
-        ((job_count++))
-        if [[ ${job_count} -ge ${workers} ]]; then
-            wait -n; ((job_count--));
-        fi
-    done
-    wait
+    # Use xargs for robust, simple, and efficient parallel execution.
+    # -P: Number of parallel processes.
+    # -I {}: Replace {} with the input line (the IP address).
+    xargs -I {} -P "${workers}" bash "$worker_script" {}
 }
 
-# --- Main Scan Functions ---
-
-# Orchestrates a full cache rebuild.
 scan::update_cache() {
     core::log "Starting network scan (mode: full rebuild)..."
-    core::log "  Networks:    ${G_CONFIG[subnets]}"
-    core::log "  Scan Mode:   ${G_CONFIG[scan_mode]}"
-
+    core::log "  Networks:    ${G_CONFIG[subnets]}"; core::log "  Scan Mode:   ${G_CONFIG[scan_mode]}"
     local temp_cache_file; temp_cache_file=$(mktemp)
-    
-    # --- NEW: Branching logic based on scan_mode ---
     if [[ "${G_CONFIG[scan_mode]}" == "snmp" ]]; then
-        # SNMP-only mode: skip ICMP, query all IPs directly.
         local all_ips_file; all_ips_file=$(mktemp)
         core::log "Phase 1: Generating full IP list for SNMP-only scan..."
-        for network in ${G_CONFIG[subnets]}; do
-            scan::generate_ip_list "${network}" >> "${all_ips_file}"
-        done
-        local total_ips; total_ips=$(wc -l < "$all_ips_file" | tr -d ' ')
-        core::log "Generated ${total_ips} IPs to query."
-
+        for network in ${G_CONFIG[subnets]}; do scan::generate_ip_list "${network}" >> "${all_ips_file}"; done
+        local total_ips; total_ips=$(wc -l < "$all_ips_file" | tr -d ' '); core::log "Generated ${total_ips} IPs to query."
         core::log "Phase 2: Querying SNMP on all generated IPs..."
-        < "${all_ips_file}" scan::parallel_snmp_query > "${temp_cache_file}"
-        rm "${all_ips_file}"
+        < "${all_ips_file}" scan::parallel_snmp_query > "${temp_cache_file}"; rm "${all_ips_file}"
     else
-        # ICMP mode (default): ping first, then query.
         local live_hosts_file; live_hosts_file=$(mktemp)
         core::log "Phase 1: Discovering live hosts via ICMP..."
-        for network in ${G_CONFIG[subnets]}; do
-            scan::_find_live_hosts "${network}" >> "${live_hosts_file}"
-        done
-        
-        local live_host_count; live_host_count=$(wc -l < "${live_hosts_file}" | tr -d ' ')
-        core::log "Found ${live_host_count} potentially live hosts."
-
+        for network in ${G_CONFIG[subnets]}; do scan::_find_live_hosts "${network}" >> "${live_hosts_file}"; done
+        local live_host_count; live_host_count=$(wc -l < "${live_hosts_file}" | tr -d ' '); core::log "Found ${live_host_count} potentially live hosts."
         core::log "Phase 2: Querying SNMP on live hosts..."
-        if [[ ${live_host_count} -gt 0 ]]; then
-            < "${live_hosts_file}" scan::parallel_snmp_query > "${temp_cache_file}"
-        fi
+        if [[ ${live_host_count} -gt 0 ]]; then < "${live_hosts_file}" scan::parallel_snmp_query > "${temp_cache_file}"; fi
         rm "${live_hosts_file}"
     fi
-    
-    local total_found; total_found=$(wc -l < "${temp_cache_file}")
-    
+    local total_found; total_found=$(wc -l < "$temp_cache_file" | tr -d ' ')
     mv "${temp_cache_file}" "${G_PATHS[hosts_cache]}"
-    
-    if [[ ${total_found} -gt 0 ]]; then
-        core::log "Scan complete. Found ${total_found} devices with SNMP response."
-        ui::print_success "Cache updated successfully."
-    else
-        core::log_error "Scan complete. No devices responded to SNMP."
-        ui::show_troubleshooting_tips
-    fi
+    if [[ ${total_found} -gt 0 ]]; then core::log "Scan complete. Found ${total_found} devices."; ui::print_success "Cache updated."; else
+        core::log_error "Scan complete. No devices responded to SNMP."; ui::show_troubleshooting_tips; fi
 }
+# --- Main Scan Functions ---
+
 
 # Performs an incremental update of the cache.
 scan::update_cache_incremental() {
@@ -207,10 +95,6 @@ scan::update_cache_incremental() {
     rm "${temp_results}"
 }
 
-# Placeholder for AP discovery
-scan::update_ap_cache() {
-    ui::print_error "AP discovery feature is not yet fully implemented."
-}
 
 # --- Neighbor Discovery Orchestration ---
 

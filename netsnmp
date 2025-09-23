@@ -1,9 +1,10 @@
 #!/bin/bash
 #
 # NetSnmp - Network Device Discovery Tool
-# Version: 2.1.0 (with Discovery)
+# Version: 3.0.0 (Robust Worker Architecture)
 #
 
+# --- Bootstrap ---
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)
 if [[ -d "/usr/local/lib/netsnmp" ]]; then LIB_DIR="/usr/local/lib/netsnmp";
 elif [[ -d "${HOME}/.local/lib/netsnmp" ]]; then LIB_DIR="${HOME}/.local/lib/netsnmp";
@@ -14,14 +15,10 @@ for lib_file in "${LIB_DIR}"/*.sh; do source "$lib_file"; done
 
 # --- Main Execution Logic ---
 main() {
-
     core::bootstrap
-
     core::check_config_context "$@"
- # STAGE 3: Parse all arguments in a single loop.
+
     local ACTION="search"; local SEARCH_PATTERN=""; local ACTION_PARAM=""
-    # (The rest of the argument parsing logic is unchanged)
-# ... (The entire rest of the main function remains the same as version 2.1.4)
     if [[ $# -eq 0 ]]; then ACTION="default"; else
         while [[ $# -gt 0 ]]; do
             case "$1" in
@@ -33,6 +30,7 @@ main() {
                 -*) ui::print_error "Unknown option: $1"; ACTION="help"; break ;; *) SEARCH_PATTERN="$1"; shift ;;
             esac; done; fi
     core::init
+
     case "$ACTION" in
         help) ui::show_help ;; version) ui::show_version ;; uninstall) ui::show_uninstall_instructions ;; wizard) ui::run_config_wizard ;; update) scan::update_cache ;;
         update_incremental) scan::update_cache_incremental ;; info) cache::show_stats ;; clear) cache::clear ;; config) core::show_config ;;

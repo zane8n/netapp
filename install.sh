@@ -8,37 +8,14 @@ set -e
 set -o pipefail
 
 # --- Configuration ---
-PREFIX_SYSTEM="/usr/local"
-PREFIX_USER="${HOME}/.local"
+set -e; set -o pipefail
+PREFIX_SYSTEM="/usr/local"; PREFIX_USER="${HOME}/.local"
+PATHS_SYSTEM=( [bin]="${PREFIX_SYSTEM}/bin" [lib]="${PREFIX_SYSTEM}/lib/netsnmp" [conf_dir]="/etc/netsnmp" [cache_dir]="/var/cache/netsnmp" [log_file]="/var/log/netsnmp.log" [man_dir]="${PREFIX_SYSTEM}/share/man/man1" )
+PATHS_USER=( [bin]="${PREFIX_USER}/bin" [lib]="${PREFIX_USER}/lib/netsnmp" [conf_dir]="${HOME}/.config/netsnmp" [cache_dir]="${HOME}/.cache/netsnmp" [log_file]="${HOME}/.cache/netsnmp.log" [man_dir]="${PREFIX_USER}/share/man/man1" )
 
-declare -A PATHS_SYSTEM=(
-    [bin]="${PREFIX_SYSTEM}/bin"
-    [lib]="${PREFIX_SYSTEM}/lib/netsnmp"
-    [conf_dir]="/etc/netsnmp"
-    [cache_dir]="/var/cache/netsnmp"
-    [log_file]="/var/log/netsnmp.log"
-    [man_dir]="${PREFIX_SYSTEM}/share/man/man1"
-)
-
-declare -A PATHS_USER=(
-    [bin]="${PREFIX_USER}/bin"
-    [lib]="${PREFIX_USER}/lib/netsnmp"
-    [conf_dir]="${HOME}/.config/netsnmp"
-    [cache_dir]="${HOME}/.cache/netsnmp"
-    [log_file]="${HOME}/.cache/netsnmp.log"
-    [man_dir]="${PREFIX_USER}/share/man/man1"
-)
-
-readonly SCRIPT_FILES=("netsnmp" "uninstall.sh")
-readonly LIB_FILES=("lib/core.sh" "lib/scan.sh" "lib/cache.sh" "lib/discovery.sh" "lib/ui.sh")
-readonly CONFIG_TEMPLATE="conf/netsnmp.conf.template"
-readonly MAN_PAGE="man/netsnmp.1"
-
-# --- Helper Functions ---
-_log() { echo "→ $*"; }
-_success() { echo "✓ $*"; }
-_error() { echo "✗ ERROR: $*" >&2; exit 1; }
-_warn() { echo "⚠️ WARNING: $*" >&2; }
+readonly SCRIPT_FILES=("netsnmp" "uninstall.sh"); readonly LIB_FILES=("lib/core.sh" "lib/scan.sh" "lib/cache.sh" "lib/discovery.sh" "lib/ui.sh" "lib/worker.sh")
+readonly CONFIG_TEMPLATE="conf/netsnmp.conf.template"; readonly MAN_PAGE="man/netsnmp.1"
+_log() { echo "→ $*"; }; _success() { echo "✓ $*"; }; _error() { echo "✗ ERROR: $*" >&2; exit 1; }; _warn() { echo "⚠️ WARNING: $*" >&2; }
 
 # --- Installation Functions ---
 
@@ -73,38 +50,7 @@ install_dependencies() {
     _success "Dependencies installed."
 }
 
-install_files() {
-    local -n paths=$1
-    local name=$2
-
-    _log "Creating directories for ${name} installation..."
-    mkdir -p "${paths[bin]}" "${paths[lib]}" "${paths[conf_dir]}" "${paths[cache_dir]}" \
-             "$(dirname "${paths[log_file]}")" "${paths[man_dir]}"
-
-    _log "Installing scripts to ${paths[bin]}..."
-    cp "${SCRIPT_FILES[@]}" "${paths[bin]}/"
-    chmod 755 "${paths[bin]}/netsnmp" "${paths[bin]}/uninstall.sh"
-
-    _log "Installing libraries to ${paths[lib]}..."
-    cp ${LIB_FILES[@]} "${paths[lib]}/"
-    chmod 644 "${paths[lib]}"/*
-
-    if [[ ! -f "${paths[conf_dir]}/netsnmp.conf" ]]; then
-        _log "Installing configuration template..."
-        cp "${CONFIG_TEMPLATE}" "${paths[conf_dir]}/netsnmp.conf"
-        chmod 644 "${paths[conf_dir]}/netsnmp.conf"
-    else
-        _log "Existing configuration found, skipping template install."
-    fi
-
-    _log "Installing man page..."
-    gzip -c "${MAN_PAGE}" > "${paths[man_dir]}/netsnmp.1.gz"
-    chmod 644 "${paths[man_dir]}/netsnmp.1.gz"
-    
-    _log "Finalizing environment..."
-    touch "${paths[log_file]}"
-    chmod 644 "${paths[log_file]}"
-}
+install_files() { local -n paths=$1; local name=$2; _log "Creating directories for ${name} installation..."; mkdir -p "${paths[bin]}" "${paths[lib]}" "${paths[conf_dir]}" "${paths[cache_dir]}" "$(dirname "${paths[log_file]}")" "${paths[man_dir]}"; _log "Installing scripts to ${paths[bin]}..."; cp "${SCRIPT_FILES[@]}" "${paths[bin]}/"; chmod 755 "${paths[bin]}/netsnmp" "${paths[bin]}/uninstall.sh"; _log "Installing libraries to ${paths[lib]}..."; cp ${LIB_FILES[@]} "${paths[lib]}/"; chmod 644 "${paths[lib]}"/*.sh; chmod 755 "${paths[lib]}/worker.sh"; if [[ ! -f "${paths[conf_dir]}/netsnmp.conf" ]]; then _log "Installing config template..."; cp "${CONFIG_TEMPLATE}" "${paths[conf_dir]}/netsnmp.conf"; chmod 644 "${paths[conf_dir]}/netsnmp.conf"; else _log "Existing config found."; fi; _log "Installing man page..."; gzip -c "${MAN_PAGE}" > "${paths[man_dir]}/netsnmp.1.gz"; chmod 644 "${paths[man_dir]}/netsnmp.1.gz"; _log "Finalizing environment..."; touch "${paths[log_file]}"; chmod 644 "${paths[log_file]}"; }
 
 main_installation() {
     if [[ $EUID -ne 0 ]]; then

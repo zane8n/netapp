@@ -13,51 +13,7 @@
 # $1: The IP address to query.
 
 # Returns: A pipe-separated string "HOSTNAME|SERIAL" on success, empty on failure.
-discovery::resolve_snmp_details() {
-    local ip="$1"
-    local communities_str="${G_CONFIG[communities]}"
-    local -a communities
-    read -r -a communities <<< "$communities_str"
-
-    # OIDs to query in a single, efficient request
-    local sysname_oid="1.3.6.1.2.1.1.5.0"
-    local -a serial_oids=(
-        "1.3.6.1.2.1.47.1.1.1.1.11.1"    # entPhysicalSerialNum
-        "1.3.6.1.4.1.9.3.6.3.0"          # Cisco Product Serial
-    )
-    local all_oids="${sysname_oid} ${serial_oids[*]}"
-
-    for community in "${communities[@]}"; do
-        core::log_debug "Querying IP ${ip} with community '${community}'"
-        local response
-        response=$(snmpget -v2c -c "${community}" -OQ -t "${G_CONFIG[snmp_timeout]}" -r 1 "${ip}" ${all_oids} 2>/dev/null)
-        
-        if [[ $? -eq 0 && -n "$response" ]]; then
-            local hostname=""; local serial=""
-            while read -r line; do
-                if [[ -z "$hostname" && "$line" == *"${sysname_oid}"* ]]; then
-                    hostname=$(echo "$line" | cut -d' ' -f2- | sed 's/"//g')
-                fi
-                if [[ -z "$serial" && ! "$line" =~ "No Such" ]]; then
-                    for oid in "${serial_oids[@]}"; do
-                        if [[ "$line" == *"$oid"* ]]; then
-                            serial=$(echo "$line" | cut -d' ' -f2- | sed 's/"//g'); break;
-                        fi
-                    done
-                fi
-            done <<< "$response"
-
-            if [[ -n "$hostname" ]]; then
-                core::log_debug "Success for ${ip}: Host=${hostname}, Serial=${serial:-N/A}"
-                echo "${hostname}|${serial}"
-                return 0
-            fi
-        fi
-    done
-
-    core::log_debug "No valid SNMP response from ${ip} with any community."
-    return 1
-}
+discovery::resolve_snmp_details() { local ip="$1"; local communities_str="${G_CONFIG[communities]}"; local -a communities; read -r -a communities <<< "$communities_str"; local sysname_oid="1.3.6.1.2.1.1.5.0"; local -a serial_oids=( "1.3.6.1.2.1.47.1.1.1.1.11.1" "1.3.6.1.4.1.9.3.6.3.0" ); local all_oids="${sysname_oid} ${serial_oids[*]}"; for community in "${communities[@]}"; do core::log_debug "Worker for ${ip} trying community '${community}'"; local response; response=$(snmpget -v2c -c "${community}" -OQ -t "${G_CONFIG[snmp_timeout]}" -r 1 "${ip}" ${all_oids} 2>/dev/null); if [[ $? -eq 0 && -n "$response" ]]; then local hostname=""; local serial=""; while read -r line; do if [[ -z "$hostname" && "$line" == *"${sysname_oid}"* ]]; then hostname=$(echo "$line" | cut -d' ' -f2- | sed 's/"//g'); fi; if [[ -z "$serial" && ! "$line" =~ "No Such" ]]; then for oid in "${serial_oids[@]}"; do if [[ "$line" == *"$oid"* ]]; then serial=$(echo "$line" | cut -d' ' -f2- | sed 's/"//g'); break; fi; done; fi; done <<< "$response"; if [[ -n "$hostname" ]]; then core::log_debug "Success for ${ip}: ${hostname}"; echo "${hostname}|${serial}"; return 0; fi; fi; done; core::log_debug "No valid SNMP response from ${ip}."; return 1; }
 
 
 # --- Diagnostic Functions ---
