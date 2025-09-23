@@ -99,16 +99,17 @@ log_msg() {
     shift
     local message="[$(date '+%Y-%m-%d %H:%M:%S')] [$level] $*"
 
-    # Always write errors to stderr, other messages to stdout unless quiet.
+    # Errors and informational messages go to stderr to not interfere with stdout data.
     if [[ "$level" == "ERROR" ]]; then
         echo -e "\033[0;31m${message}\033[0m" >&2
     elif [[ "$QUIET" != "true" ]]; then
-        echo "$message"
+        # All standard logs now go to stderr.
+        echo "$message" >&2
     fi
 
-    # Log to file if enabled and we have permission.
+    # File logging remains the same.
     if [[ "${CONFIG[enable_logging]}" == "true" ]]; then
-        echo "$message" >> "$LOG_FILE" 2>/dev/null || true # Fail silently on permission error
+        echo "$message" >> "$LOG_FILE" 2>/dev/null || true
     fi
 }
 

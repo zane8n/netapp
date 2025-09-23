@@ -1,54 +1,66 @@
-.TH netsnmp 1 "2025-09-23" "3.0.0" "NetSnmp User Manual"
+.TH netsnmp 1 "2025-09-23" "2.0.0" "netsnmp User Manual"
+
 .SH NAME
-netsnmp \- A fast and efficient network device discovery tool
+netsnmp \- A low-noise network discovery and inventory tool
+
 .SH SYNOPSIS
 .B netsnmp
-[\fIOPTIONS\fR] [\fIPATTERN\fR]
+[\fICOMMAND\fR] [\fIOPTIONS\fR] [\fIPATTERN\fR]
+
 .SH DESCRIPTION
 .B netsnmp
-is a command-line tool to discover and inventory network devices using ICMP and SNMP. It scans specified networks, queries devices for their hostname and serial number, and maintains a local cache for quick searching.
-.SH CORE COMMANDS
+is a network tool designed to discover and inventory network devices using ICMP and SNMP. It is optimized for efficiency and a low network footprint by minimizing queries. It maintains a local cache of discovered devices for fast searching and supports secondary discovery of device neighbors (like APs) via CDP/LLDP on switches.
+
+.SH COMMANDS
 .TP
-.BR \-u ", " \-\-update
-Performs a full scan of the configured networks and rebuilds the device cache from scratch.
+.B \-\-update
+Scans the networks defined in the configuration file and updates the primary device cache. Requires root privileges.
 .TP
-.BR [PATTERN]
-Searches the cache for devices matching the pattern (IP, hostname, or serial). Lists all devices if no pattern is given.
-.SH OPTIONS
+.B \-\-discover\-aps
+Queries devices identified as switches in the primary cache for their CDP/LLDP neighbors to discover connected devices like Access Points. Requires root privileges.
 .TP
-.BR \-h ", " \-\-help
-Show the help message.
+.B search [\fIPATTERN\fR]
+Searches the local cache for devices matching the pattern. This is the default action if no other command is provided.
 .TP
-.BR \-i ", " \-\-info
-Show cache statistics.
+.B \-\-info, \-i
+Displays statistics about the cache files, including the number of hosts, last update time, and validity status.
 .TP
-.BR \-c ", " \-\-clear
-Clear all cached data.
+.B \-\-clear, \-c
+Removes all cache files. Requires root privileges.
 .TP
-.BR \-\-config
-Display the current configuration.
+.B \-\-aps [\fIPATTERN\fR]
+Searches and displays the contents of the AP / neighbor cache.
 .TP
-.BR \-\-wizard
-Run the interactive configuration wizard.
+.B \-\-wizard
+Starts the interactive configuration wizard to create or update the configuration file. Requires root privileges.
 .TP
-.BR \-\-test-snmp " \fIIP_ADDRESS\fR"
-Test SNMP connectivity against a single target IP.
+.B \-\-config
+Displays the currently loaded configuration.
+.TP
+.B \-\-help, \-h
+Displays the short command-line help message.
+.TP
+.B \-\-version
+Displays the version of the tool.
+
 .SH FILES
 .TP
 .B /etc/netsnmp/netsnmp.conf
-System-wide configuration file (used when run with sudo).
+The system-wide configuration file.
 .TP
-.B /var/cache/netsnmp/hosts.cache
-System-wide device cache file.
-.SH EXAMPLES
+.B /var/cache/netsnmp/netsnmp.cache
+The primary cache file for discovered devices.
 .TP
-.B sudo netsnmp --wizard
-Configure the tool for the first time.
+.B /var/cache/netsnmp/netsnmp.aps.cache
+The secondary cache file for devices discovered via CDP/LLDP.
 .TP
-.B sudo netsnmp --update
-Scan the network and build the cache.
-.TP
-.B netsnmp cisco-switch
-Search for a device.
+.B /var/log/netsnmp.log
+The system-wide log file.
+
 .SH AUTHOR
-Kikandi Safari Isaac
+This refactored version was prepared by Gemini based on your requirements.
+
+.SH SEE ALSO
+.BR snmpwalk(1),
+.BR snmpget(1),
+.BR ping(8)

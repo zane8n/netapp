@@ -1,22 +1,16 @@
 #!/bin/bash
 #
-# NetSnmp v2.0 - Network Discovery Tool
+# NetSnmp v2.1 - Network Discovery Tool
 #
 # This is the main executable. It sources libraries, parses arguments,
 # and dispatches actions to the appropriate functions.
 
-VERSION="2.0.0-refactored"
+VERSION="2.1.0-hotfix"
 
 # --- Setup Environment ---
-
-# Determine application paths.
-# LIB_DIR is set relative to the location of this script, making it portable.
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)
-LIB_DIR="/usr/local/lib/netsnmp" # Standard installation path
+LIB_DIR="/usr/local/lib/netsnmp"
 
-# Define global paths. These are based on a standard system-wide installation.
-# The script will still function if run from a local directory, but will look
-# for config in these standard locations.
 CONF_DIR="/etc/netsnmp"
 CACHE_DIR="/var/cache/netsnmp"
 LOG_DIR="/var/log"
@@ -27,10 +21,6 @@ AP_CACHE_FILE="${CACHE_DIR}/netsnmp.aps.cache"
 LOG_FILE="${LOG_DIR}/netsnmp.log"
 
 # --- Source Libraries ---
-# REFACTOR: All logic is now encapsulated in library files. The main script
-# only needs to source them to gain all functionality.
-
-# Check if the library directory exists before sourcing
 if [[ ! -d "$LIB_DIR" ]]; then
     echo "ERROR: Library directory not found at '$LIB_DIR'." >&2
     echo "Please ensure NetSnmp is installed correctly." >&2
@@ -44,19 +34,33 @@ done
 
 
 # --- Main Logic ---
-
 main() {
-    # Set sane script behavior
     set -o pipefail
+    
+    # Load configuration first, so it's available for all actions
+    # We load it early so the user sees errors if the config is missing.
+    load_config
 
-    # Default action is to show help if no arguments are given
-    local ACTION="help"
+    # --- Argument Parsing ---
+    if [[ $# -eq 0 ]]; then
+        show_help
+        exit 0
+    fi
+
+    local ACTION="$1"
     local PATTERN=""
-    local CUSTOM_NETWORKS=""
-    local CUSTOM_COMMUNITIES=""
+
+    # Handle search as the default action if the first arg is not a flag
+    if [[ ! "$ACTION" =~ ^- ]]; then
+        PATTERN="$ACTION"
+        ACTION="search"
+        shift # Consume the pattern argument
+    else
+        shift # Consume the action/flag argument
+    fi
 
     # Check for root privileges on actions that require them
-    case "${1:-}" in
+    case "$ACTION" in
         --update|--wizard|--discover-aps|--clear)
             if [[ $EUID -ne 0 ]]; then
                 log_error "This command requires root privileges. Please run with 'sudo'."
@@ -65,29 +69,12 @@ main() {
             ;;
     esac
 
-    # Initialize global flags
     QUIET="false"
     DEBUG="false"
 
-    # --- Argument Parsing ---
-    # REFACTOR: Argument parsing is now cleaner and handles combined options.
-    if [[ $# -gt 0 ]]; then
-        ACTION="$1"
-        shift
-    fi
-
-    # Handle search as the default action
-    if [[ ! "$ACTION" =~ ^-- && "$ACTION" != "search" ]]; then
-        PATTERN="$ACTION"
-        ACTION="search"
-    fi
-
-    # Load configuration first, so it's available for all actions
-    load_config
-
     case "$ACTION" in
         --update)
-            update_cache "$CUSTOM_NETWORKS" "$CUSTOM_COMMUNITIES"
+            update_cache "$@" # Pass remaining args for custom networks/communities
             ;;
         --discover-aps)
             update_ap_cache
@@ -95,7 +82,6 @@ main() {
         search)
             if [[ -z "$PATTERN" ]]; then
                 log_error "Please provide a pattern to search for."
-                show_help
                 exit 1
             fi
             search_cache "$PATTERN"
@@ -118,13 +104,15 @@ main() {
         --version)
             echo "NetSnmp v${VERSION}"
             ;;
+        --test-snmp)
+            test_snmp "$1" # Pass the IP address to the function
+            ;;
         *)
-            log_error "Unknown command: $ACTION"
+            log_error "Unknown command or option: $ACTION"
             show_help
             exit 1
             ;;
     esac
 }
 
-# Execute the main function with all provided arguments
 main "$@"

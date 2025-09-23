@@ -30,13 +30,9 @@ Configuration & System:
   -h, --help            Show this help message.
   --version             Show tool version.
 
-Advanced Scanning:
+Advanced Scanning & Debugging:
   -S, --networks "..."  Override configured networks for a single scan.
   -C, --communities "..." Override configured SNMP communities for a single scan.
-
-Debugging:
-  -v, --verbose         Enable verbose output.
-  -vv, --debug          Enable debug output with shell command tracing.
   --test-snmp <IP>      Test SNMP connectivity to a single device.
 
 Examples:
