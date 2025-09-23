@@ -1,59 +1,139 @@
 #!/bin/bash
 #
-# NetSnmp Library - Core Functions
-#
-declare -A G_CONFIG; declare -A G_PATHS; G_VERBOSE=false; G_QUIET=false; G_DEBUG=false; VERSION="3.0.0"
+# NetSnmp - Core Library
+# Description: Contains essential functions for configuration, logging, and utilities.
 
-core::bootstrap() {
-    if [[ $EUID -eq 0 ]]; then
-        G_PATHS[conf_dir]="/etc/netsnmp"; G_PATHS[cache_dir]="/var/cache/netsnmp"; G_PATHS[log_file]="/var/log/netsnmp.log";
-    else
-        G_PATHS[conf_dir]="${HOME}/.config/netsnmp"; G_PATHS[cache_dir]="${HOME}/.cache/netsnmp"; G_PATHS[log_file]="${HOME}/.cache/netsnmp.log";
-    fi
-    G_PATHS[config_file]="${G_PATHS[conf_dir]}/netsnmp.conf"
-    G_PATHS[hosts_cache]="${G_PATHS[cache_dir]}/hosts.cache"
-    G_PATHS[ap_cache]="${G_PATHS[cache_dir]}/ap.cache"
-}
+# --- Configuration Management ---
 
-core::init() {
-    core::load_config
-}
+# Declare CONFIG as an associative array to hold all settings.
+declare -A CONFIG
 
-core::load_config() {
-    G_CONFIG=( ["subnets"]="192.168.1.0/24" ["communities"]="public" ["ping_timeout"]="1" ["snmp_timeout"]="2" ["scan_workers"]="25" ["cache_ttl"]="3600" ["enable_logging"]="true" ["scan_delay"]="20" ["discovery_protocols"]="cdp lldp" ["scan_mode"]="icmp" )
-    if [[ ! -f "${G_PATHS[config_file]}" ]]; then return 0; fi
-    while IFS='=' read -r key value; do
-        [[ $key =~ ^\s*# ]] || [[ -z $key ]] && continue
-        key=$(echo "$key" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
-        value=$(echo "$value" | sed -e 's/^[[:space:]]*//; s/[[:space:]]*$//' -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//")
-        if [[ -n "${G_CONFIG[$key]+_}" ]]; then G_CONFIG["$key"]="$value"; fi
-    done < "${G_PATHS[config_file]}"
-    core::log_debug "Config loaded. Scan mode is '${G_CONFIG[scan_mode]}'."
-}
+# Default configuration values. These are overwritten by the config file.
+DEFAULT_CONFIG=(
+    ["networks"]=""
+    ["communities"]="public"
+    ["ping_timeout"]="1"
+    ["snmp_timeout"]="2"
+    ["scan_workers"]="20"
+    ["cache_ttl"]="3600"
+    ["enable_logging"]="true"
+)
 
-core::save_config() {
-    mkdir -p "${G_PATHS[conf_dir]}"; local tmp_file; tmp_file=$(mktemp)
-    local -a ordered_keys=( "subnets" "communities" "ping_timeout" "snmp_timeout" "scan_workers" "cache_ttl" "scan_delay" "enable_logging" "discovery_protocols" "scan_mode" )
-    echo "# NetSnmp Configuration File" > "$tmp_file"; echo "# Generated on $(date)" >> "$tmp_file"; echo "" >> "$tmp_file"
-    for key in "${ordered_keys[@]}"; do
-        case "$key" in
-            subnets) echo "# Networks to scan (space-separated: CIDR, ranges, single IPs)" >> "$tmp_file" ;;
-            scan_delay) echo "# Delay in milliseconds between pings to reduce network noise (0 to disable)." >> "$tmp_file" ;;
-            scan_mode) echo "# Scan strategy: \"icmp\" (ping first) or \"snmp\" (direct SNMP query)." >> "$tmp_file" ;;
-        esac
-        echo "${key}=\"${G_CONFIG[$key]}\"" >> "$tmp_file"; echo "" >> "$tmp_file"
+# Loads configuration from the file into the CONFIG array.
+# REFACTOR: This function is now robust. It handles missing files, trims whitespace,
+# removes quotes, and ignores comments/empty lines gracefully.
+load_config() {
+    # Initialize with defaults first
+    for key in "${!DEFAULT_CONFIG[@]}"; do
+        CONFIG["$key"]="${DEFAULT_CONFIG[$key]}"
     done
-    mv "$tmp_file" "${G_PATHS[config_file]}"; if [[ $EUID -eq 0 ]]; then chmod 644 "${G_PATHS[config_file]}"; fi
+
+    if [[ ! -f "$CONFIG_FILE" ]]; then
+        # If running interactively, prompt for wizard. Otherwise, use defaults.
+        if [[ -t 1 ]]; then
+            log_error "Configuration file not found at '$CONFIG_FILE'."
+            log_info "Please create it or run 'sudo netsnmp --wizard'."
+        fi
+        return 1
+    fi
+
+    # Read the config file line by line
+    while IFS='=' read -r key value; do
+        # Skip comments and empty lines
+        [[ $key =~ ^\s*# ]] || [[ -z $key ]] && continue
+
+        # Trim whitespace and remove quotes from key and value
+        key=$(echo "$key" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+        value=$(echo "$value" | sed -e 's/^[[:space:]]*//;s/[[:space:]]*$//' -e 's/^"//' -e 's/"$//')
+
+        # Store in config array if the key is valid
+        if [[ -n "${DEFAULT_CONFIG[$key]}" ]]; then
+            CONFIG["$key"]="$value"
+        fi
+    done < "$CONFIG_FILE"
+    log_debug "Configuration loaded successfully."
 }
 
-core::check_config_context() {
-    local system_config="/etc/netsnmp/netsnmp.conf"
-    if [[ $EUID -ne 0 && -f "$system_config" && ! -f "${G_PATHS[config_file]}" ]]; then
-        local original_command="netsnmp $*"; ui::print_warning_box "A system-wide configuration was found. To use it, you must run your command with 'sudo'.\n\n  Example: sudo ${original_command}\n"; exit 1
+# Saves the current CONFIG array back to the configuration file.
+save_config() {
+    # Use a temporary file to prevent corruption on write error
+    local tmp_file
+    tmp_file=$(mktemp) || { log_error "Failed to create temp file for saving config."; return 1; }
+
+    cat > "$tmp_file" <<- EOF
+# NetSnmp Configuration File
+# Generated on $(date) by the configuration wizard.
+
+networks="${CONFIG[networks]}"
+communities="${CONFIG[communities]}"
+
+# --- Performance & Stealth Settings ---
+ping_timeout="${CONFIG[ping_timeout]}"
+snmp_timeout="${CONFIG[snmp_timeout]}"
+scan_workers="${CONFIG[scan_workers]}"
+
+# --- Caching ---
+cache_ttl="${CONFIG[cache_ttl]}"
+
+# --- Logging ---
+enable_logging="${CONFIG[enable_logging]}"
+EOF
+
+    # Move temp file into place. Use sudo if needed.
+    if [[ $EUID -eq 0 ]]; then
+        install -m 644 "$tmp_file" "$CONFIG_FILE"
+    else
+        # This case is rare (user running wizard without sudo), but handle it.
+        cp "$tmp_file" "$CONFIG_FILE"
+    fi
+    rm -f "$tmp_file"
+    log_info "Configuration saved to $CONFIG_FILE"
+}
+
+# --- Logging Framework ---
+# REFACTOR: Centralized and improved logging. Now handles permissions checks
+# and respects the QUIET flag.
+
+log_msg() {
+    local level="$1"
+    shift
+    local message="[$(date '+%Y-%m-%d %H:%M:%S')] [$level] $*"
+
+    # Always write errors to stderr, other messages to stdout unless quiet.
+    if [[ "$level" == "ERROR" ]]; then
+        echo -e "\033[0;31m${message}\033[0m" >&2
+    elif [[ "$QUIET" != "true" ]]; then
+        echo "$message"
+    fi
+
+    # Log to file if enabled and we have permission.
+    if [[ "${CONFIG[enable_logging]}" == "true" ]]; then
+        echo "$message" >> "$LOG_FILE" 2>/dev/null || true # Fail silently on permission error
     fi
 }
 
-core::log() { [[ "$G_QUIET" == "true" ]] && return 0; local message="[$(date '+%Y-%m-%d %H:%M:%S')] INFO: $*"; echo "$message" >&2; if [[ "${G_CONFIG[enable_logging]}" == "true" ]]; then echo "$message" >> "${G_PATHS[log_file]}" 2>/dev/null || true; fi; }
-core::log_error() { local message="[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: $*"; echo "$message" >&2; if [[ "${G_CONFIG[enable_logging]}" == "true" ]]; then echo "$message" >> "${G_PATHS[log_file]}" 2>/dev/null || true; fi; }
-core::log_debug() { [[ "$G_DEBUG" != "true" ]] && return 0; local timestamp; timestamp=$(date '+%H:%M:%S'); echo "[DEBUG ${timestamp}] $*" >&2; }
-core::is_command_available() { command -v "$1" &>/dev/null; }
+log_info()  { log_msg "INFO" "$*"; }
+log_error() { log_msg "ERROR" "$*"; }
+log_debug() {
+    if [[ "$DEBUG" == "true" ]]; then
+        log_msg "DEBUG" "$*"
+    fi
+}
+
+
+# --- Utility Functions ---
+
+# Checks if a command is available in the system's PATH.
+is_command_available() {
+    command -v "$1" &>/dev/null
+}
+
+# Exports necessary variables and functions for subshells (used in parallel scanning).
+export_for_subshells() {
+    export CONFIG_FILE CACHE_FILE AP_CACHE_FILE LOG_FILE QUIET DEBUG
+    export -A CONFIG
+    export -f log_msg log_info log_error log_debug
+    export -f is_command_available
+    export -f get_device_details # From scan.sh
+    export -f scan_single_ip      # From worker.sh
+}

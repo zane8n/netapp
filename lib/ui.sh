@@ -1,32 +1,122 @@
 #!/bin/bash
 #
-# NetSnmp Library - UI Functions
-#
-if [[ -t 1 ]]; then readonly C_RESET='\033[0m'; readonly C_BOLD='\033[1m'; readonly C_RED='\033[0;31m'; readonly C_GREEN='\033[0;32m'; readonly C_YELLOW='\033[0;33m'; readonly C_CYAN='\033[0;36m'; fi
+# NetSnmp - UI Library
+# Description: Handles all user-facing output, including help text,
+# information displays, and the configuration wizard.
 
-ui::print_header() { echo -e "\n${C_BOLD}${C_CYAN}--- ${1} ---${C_RESET}"; }
-ui::print_success() { echo -e "${C_GREEN}✓${C_RESET} ${1}"; }
-ui::print_error() { echo -e "${C_RED}✗ ERROR:${C_RESET} ${1}" >&2; }
-ui::print_info() { echo -e "${C_YELLOW}→${C_RESET} ${1}"; }
-ui::print_warning_box() { local message="$1"; echo -e "${C_YELLOW}================================ WARNING ================================"; echo -e "${C_RESET}"; printf "  %s\n" "$message"; echo -e "${C_YELLOW}======================================================================${C_RESET}"; }
+# Displays the main help message.
+# REFACTOR: Rewritten to be clearer, more organized, and concise.
+show_help() {
+    cat << EOF
+NetSnmp v${VERSION} - A low-noise network discovery and inventory tool.
 
-ui::show_help() {
-    echo -e "${C_BOLD}NetSnmp v${VERSION} - Network Device Discovery Tool${C_RESET}"; echo "A fast and efficient network scanner using ICMP and SNMP."; echo ""; echo -e "${C_BOLD}USAGE:${C_RESET}"; echo "  netsnmp [OPTIONS] [SEARCH_PATTERN]"; echo ""; echo -e "${C_BOLD}CORE COMMANDS:${C_RESET}"; echo -e "  ${C_CYAN}-u, --update${C_RESET}              Rebuilds the device cache by scanning the network."; echo -e "  ${C_CYAN}[pattern]${C_RESET}                Search the cache for a device by IP, hostname, or serial."; echo ""; echo -e "${C_BOLD}CACHE & CONFIG:${C_RESET}"; echo -e "  ${C_CYAN}-i, --info${C_RESET}                Show cache statistics and status."; echo -e "  ${C_CYAN}-c, --clear${C_RESET}               Clear all cached data."; echo -e "  ${C_CYAN}--config${C_RESET}                  Display the current configuration."; echo -e "  ${C_CYAN}--wizard${C_RESET}                  Run the interactive configuration wizard."; echo ""; echo -e "${C_BOLD}DIAGNOSTICS:${C_RESET}"; echo -e "  ${C_CYAN}--test-scan${C_RESET}               Run a quick check of dependencies and configuration."; echo -e "  ${C_CYAN}--test-snmp [IP]${C_RESET}        Test SNMP connectivity against a single IP."; echo ""; echo -e "For complete details, see ${C_BOLD}man netsnmp${C_RESET}."
+Usage:
+  netsnmp [COMMAND] [OPTIONS] [PATTERN]
+
+Commands:
+  --update              Scan networks defined in the config and update the cache.
+  --discover-aps        Discover APs and other devices via switches in the cache.
+  search [pattern]      Search the cache for a device (default action if no command).
+
+Cache & Information:
+  -i, --info            Show cache statistics and status.
+  -c, --clear           Clear all discovery caches.
+  --aps [pattern]       Show discovered APs from the AP cache.
+  --serials [pattern]   Show devices with a discovered serial number.
+
+Configuration & System:
+  --wizard              Run the interactive configuration wizard.
+  --config              Display the current configuration.
+  -h, --help            Show this help message.
+  --version             Show tool version.
+
+Advanced Scanning:
+  -S, --networks "..."  Override configured networks for a single scan.
+  -C, --communities "..." Override configured SNMP communities for a single scan.
+
+Debugging:
+  -v, --verbose         Enable verbose output.
+  -vv, --debug          Enable debug output with shell command tracing.
+  --test-snmp <IP>      Test SNMP connectivity to a single device.
+
+Examples:
+  sudo netsnmp --update                 # Update the main device cache.
+  sudo netsnmp --discover-aps           # Discover APs connected to cached switches.
+  netsnmp switch-core-01                # Search for a device by name or IP.
+  netsnmp --aps cisco                   # Find all Cisco APs.
+EOF
 }
 
-ui::show_version() { echo "NetSnmp v${VERSION}"; }
-ui::show_uninstall_instructions() { ui::print_header "Uninstall Instructions"; ui::print_info "To uninstall, please run the dedicated uninstall script:\n  sudo uninstall.sh"; }
-ui::show_troubleshooting_tips() {
-    ui::print_header "Troubleshooting"; ui::print_info "If no devices were found, please check the following:"; echo "  1. Network Connectivity: Can you 'ping' the target devices manually?"; echo "  2. Configuration: Are the subnets and communities correct? ('netsnmp --config')"; echo "  3. Firewalls: Is ICMP (ping) or SNMP (UDP port 161) being blocked?"; echo -e "     ${C_YELLOW}→ If ICMP is blocked, you MUST set: scan_mode=\"snmp\"${C_RESET}"; echo "  4. Device SNMP: Is SNMP enabled on the target network devices?"; echo ""; ui::print_info "Use diagnostic tools to isolate the problem:"; echo "  - 'netsnmp --test-snmp [IP]' to verify SNMP against a specific device."
-}
-
-ui::run_config_wizard() {
-    core::load_config; ui::print_header "NetSnmp Configuration Wizard"; echo "Please provide default values. Leave prompts blank to keep current values."; echo ""
-    local current_subnets="${G_CONFIG[subnets]}"; read -rp "Networks to scan: [${current_subnets}]: " new_subnets; G_CONFIG[subnets]="${new_subnets:-$current_subnets}"
-    local current_communities="${G_CONFIG[communities]}"; read -rp "SNMP communities: [${current_communities}]: " new_communities; G_CONFIG[communities]="${new_communities:-$current_communities}"
-    local current_mode="${G_CONFIG[scan_mode]}"; read -rp "Scan mode (icmp/snmp): [${current_mode}]: " new_mode; G_CONFIG[scan_mode]="${new_mode:-$current_mode}"
-    if [[ "${G_CONFIG[scan_mode]}" != "icmp" && "${G_CONFIG[scan_mode]}" != "snmp" ]]; then
-        ui::print_error "Invalid mode '${G_CONFIG[scan_mode]}'. Reverting to '${current_mode}'."; G_CONFIG[scan_mode]="${current_mode}"
+# Displays statistics and information about the cache.
+# REFACTOR: Provides more useful and readable information.
+show_info() {
+    echo "--- NetSnmp Cache Information ---"
+    if [[ ! -f "$CACHE_FILE" || ! -s "$CACHE_FILE" ]]; then
+        log_error "Main device cache is empty or does not exist."
+        log_info "Run 'sudo netsnmp --update' to build it."
+        return 1
     fi
-    echo ""; core::save_config; ui::print_success "Configuration saved to: ${G_PATHS[config_file]}"; echo ""; ui::print_info "Your selected scan mode is now: '${G_CONFIG[scan_mode]}'."; ui::print_info "You can now run 'netsnmp --update'."
+
+    local total_hosts; total_hosts=$(wc -l < "$CACHE_FILE")
+    local last_mod; last_mod=$(stat -c %y "$CACHE_FILE")
+    local age_sec; age_sec=$(( $(date +%s) - $(stat -c %Y "$CACHE_FILE") ))
+    local age_min=$(( age_sec / 60 ))
+
+    echo "Main Device Cache: $CACHE_FILE"
+    echo "  - Total Devices: $total_hosts"
+    echo "  - Last Updated:  $last_mod ($age_min minutes ago)"
+
+    if [[ "$age_sec" -gt "${CONFIG[cache_ttl]}" ]]; then
+        log_error "  - Status: Stale (older than TTL of ${CONFIG[cache_ttl]}s). Please run --update."
+    else
+        echo -e "  - Status: \033[0;32mValid\033[0m"
+    fi
+    echo ""
+
+    if [[ -f "$AP_CACHE_FILE" && -s "$AP_CACHE_FILE" ]]; then
+        local ap_hosts; ap_hosts=$(wc -l < "$AP_CACHE_FILE")
+        local ap_last_mod; ap_last_mod=$(stat -c %y "$AP_CACHE_FILE")
+        echo "AP & CDP/LLDP Cache: $AP_CACHE_FILE"
+        echo "  - Total Devices: $ap_hosts"
+        echo "  - Last Updated:  $ap_last_mod"
+    else
+        log_info "AP cache is empty. Run 'sudo netsnmp --discover-aps' after an update."
+    fi
+}
+
+# Displays the currently loaded configuration.
+show_config() {
+    echo "--- Current Configuration ---"
+    echo "Loaded from: $CONFIG_FILE"
+    echo
+    for key in "${!CONFIG[@]}"; do
+        printf "  %-18s: %s\n" "$key" "${CONFIG[$key]}"
+    done
+}
+
+# Runs the interactive configuration wizard.
+# REFACTOR: Prompts are clearer and provide better examples.
+run_config_wizard() {
+    echo "╔══════════════════════════════════════════════════╗"
+    echo "║             NetSnmp Configuration Wizard         ║"
+    echo "╚══════════════════════════════════════════════════╝"
+    echo
+    log_info "This wizard will help you create a configuration file."
+    log_info "Press [Enter] to accept the default value in brackets."
+    echo
+
+    # Prompt for networks
+    echo "Enter the networks to scan, separated by spaces."
+    echo "Examples: 192.168.1.0/24 10.10.0.50-100"
+    read -p "Networks [${CONFIG[networks]}]: " user_networks
+    CONFIG[networks]="${user_networks:-${CONFIG[networks]}}"
+
+    # Prompt for communities
+    echo
+    echo "Enter the SNMP communities to try, separated by spaces."
+    read -p "Communities [${CONFIG[communities]}]: " user_communities
+    CONFIG[communities]="${user_communities:-${CONFIG[communities]}}"
+
+    # Save the configuration
+    save_config
 }

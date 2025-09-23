@@ -1,57 +1,74 @@
 #!/bin/bash
 #
-# NetSnmp - Uninstaller
-# Description: Safely removes all files and directories created by the installer.
+# NetSnmp Uninstaller
 #
+# Removes all system-wide files and directories created by the installer.
+# Must be run with sudo.
 
 set -e
 
 # --- Configuration ---
-readonly FILES_TO_REMOVE=(
-    "/usr/local/bin/netsnmp"
-    "/usr/local/bin/uninstall.sh"
-    "/usr/local/share/man/man1/netsnmp.1.gz"
-)
-readonly DIRS_TO_REMOVE=(
-    "/usr/local/lib/netsnmp"
-    "/etc/netsnmp"
-    "/var/cache/netsnmp"
-    "${HOME}/.config/netsnmp"
-    "${HOME}/.cache/netsnmp"
-)
+INSTALL_PREFIX="/usr/local"
+BIN_DIR="${INSTALL_PREFIX}/bin"
+LIB_DIR="${INSTALL_PREFIX}/lib/netsnmp"
+CONF_DIR="/etc/netsnmp"
+CACHE_DIR="/var/cache/netsnmp"
+LOG_FILE="/var/log/netsnmp.log"
+MAN_DIR="${INSTALL_PREFIX}/share/man/man1"
+
+TARGET_BINARY="${BIN_DIR}/netsnmp"
+
+# --- UI Functions ---
+info() { echo "INFO: $*"; }
+error() { echo "ERROR: $*" >&2; exit 1; }
+success() { echo "✅ SUCCESS: $*"; }
+warn() { echo "WARN: $*"; }
+
 
 # --- Helper Functions ---
-_log() { echo "→ $*"; }
-_success() { echo "✓ $*"; }
-_warn() { echo "⚠️ $*"; }
-
-# --- Main Logic ---
-echo "--- NetSnmp Uninstaller ---"
-if [[ $EUID -ne 0 ]]; then
-    _warn "This script must be run with sudo to remove system files."
-    exit 1
-fi
-
-read -p "This will permanently remove NetSnmp files and configurations. Are you sure? (y/N) " -n 1 -r
-echo
-if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-    echo "Aborting."
-    exit 0
-fi
-
-_log "Removing individual files..."
-for file in "${FILES_TO_REMOVE[@]}"; do
-    if [[ -f "$file" ]]; then
-        rm -f "$file" && _success "Removed ${file}"
+check_root() {
+    if [[ $EUID -ne 0 ]]; then
+        error "This uninstaller must be run as root. Please use 'sudo bash $0'."
     fi
-done
+}
 
-_log "Removing directories..."
-for dir in "${DIRS_TO_REMOVE[@]}"; do
-    if [[ -d "$dir" ]]; then
-        rm -rf "$dir" && _success "Removed directory ${dir}"
+# --- Main Uninstallation Logic ---
+main() {
+    echo "╔═════════════════════════════════════╗"
+    echo "║       NetSnmp Tool Uninstaller        ║"
+    echo "╚═════════════════════════════════════╝"
+    echo ""
+    read -p "This will remove all NetSnmp files. Are you sure? [y/N] " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        echo "Uninstallation cancelled."
+        exit 0
     fi
-done
 
-echo ""
-_success "NetSnmp has been successfully uninstalled."
+    check_root
+
+    info "Removing files and directories..."
+    rm -f "$TARGET_BINARY"
+    rm -rf "$LIB_DIR"
+    rm -f "${MAN_DIR}/netsnmp.1.gz"
+
+    # Important: Only remove config/cache if they exist to avoid errors
+    if [ -d "$CONF_DIR" ]; then
+        # Check if user wants to keep configuration
+        read -p "Do you want to remove configuration files in ${CONF_DIR}? [y/N] " -n 1 -r
+        echo
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+            rm -rf "$CONF_DIR"
+            info "Removed configuration directory."
+        else
+            warn "Skipping configuration directory removal."
+        fi
+    fi
+
+    rm -rf "$CACHE_DIR"
+    rm -f "$LOG_FILE"
+
+    success "Uninstallation complete."
+}
+
+main "$@"

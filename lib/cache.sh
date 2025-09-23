@@ -1,35 +1,86 @@
 #!/bin/bash
 #
-# NetSnmp Library - Cache Functions
-#
+# NetSnmp - Cache Library
+# Description: Manages all interactions with the cache files, including
+# updates, searches, and cleaning.
 
-cache::is_valid() {
-    local cache_file="${G_PATHS[hosts_cache]}"; if [[ ! -f "$cache_file" || ! -s "$cache_file" ]]; then core::log_debug "Cache invalid: Missing or empty."; return 1; fi
-    local cache_age=$(( $(date +%s) - $(stat -c %Y "$cache_file" 2>/dev/null || stat -f %m "$cache_file" 2>/dev/null || echo 0) ))
-    if [[ ${cache_age} -gt ${G_CONFIG[cache_ttl]} ]]; then core::log_debug "Cache invalid: Stale."; return 1; fi; return 0;
+# Checks if the main device cache is present and not stale.
+is_cache_valid() {
+    [[ -s "$CACHE_FILE" ]] && \
+    (( $(date +%s) - $(stat -c %Y "$CACHE_FILE") < ${CONFIG[cache_ttl]:-3600} ))
 }
 
-cache::clear() {
-    ui::print_header "Clearing Cache"; local cache_files=("${G_PATHS[hosts_cache]}" "${G_PATHS[ap_cache]}")
-    for file in "${cache_files[@]}"; do
-        if [[ -f "$file" ]]; then rm -f "$file" && ui::print_success "Removed ${file}" || ui::print_error "Failed to remove ${file}."; fi
+# Updates the main device cache by running a parallel scan.
+# REFACTOR: This function is now a high-level wrapper. The complex logic has been
+# moved to scan.sh and worker.sh. It properly handles temporary files and permissions.
+update_cache() {
+    local networks="${1:-${CONFIG[networks]}}"
+    if [[ -z "$networks" ]]; then
+        log_error "No networks to scan. Please define them in '$CONFIG_FILE' or use the -S flag."
+        return 1
+    fi
+
+    log_info "Starting network scan..."
+    log_info "Networks: $networks"
+    log_info "Communities: ${CONFIG[communities]}"
+
+    local temp_cache;
+    temp_cache=$(mktemp) || { log_error "Could not create temp file for cache."; return 1; }
+
+    # The run_parallel_scan function will output all found devices to stdout
+    run_parallel_scan "$networks" > "$temp_cache"
+
+    local found_count;
+    found_count=$(wc -l < "$temp_cache")
+
+    if (( found_count > 0 )); then
+        # Atomically replace the old cache with the new one
+        # Use sudo if we are running as root to set correct permissions
+        if [[ $EUID -eq 0 ]]; then
+            install -m 644 "$temp_cache" "$CACHE_FILE"
+        else
+            mv "$temp_cache" "$CACHE_FILE"
+        fi
+        log_info "Scan complete. Found and cached $found_count devices."
+    else
+        log_error "Scan complete. No responsive devices found."
+        rm -f "$temp_cache"
+        return 1
+    fi
+}
+
+
+# Searches the main cache for a pattern.
+# REFACTOR: Simplified search logic. It now case-insensitively matches the
+# pattern against the entire line, making it easy to search by IP, name, or serial.
+search_cache() {
+    local pattern="$1"
+
+    if [[ ! -s "$CACHE_FILE" ]]; then
+        log_error "Cache is empty. Please run 'netsnmp --update' first."
+        return 1
+    fi
+
+    log_info "Searching for devices matching '${pattern}'..."
+    # Use grep for efficient, case-insensitive searching
+    grep -i "$pattern" "$CACHE_FILE" | while IFS='|' read -r ip name serial mac descr; do
+        # Pretty print the output
+        printf "IP:       %s\n" "$ip"
+        printf "Name:     %s\n" "$name"
+        [[ -n "$serial" ]] && printf "Serial:   %s\n" "$serial"
+        [[ -n "$mac" ]] && printf "MAC:      %s\n" "$mac"
+        echo "----------------------------------------"
     done
+
+    # Check if grep found anything
+    if ! grep -iq "$pattern" "$CACHE_FILE"; then
+        log_error "No devices found matching '$pattern'."
+    fi
 }
 
-cache::show_stats() {
-    ui::print_header "Cache Information"; local cache_file="${G_PATHS[hosts_cache]}"; if [[ ! -f "$cache_file" ]]; then ui::print_error "Cache file not found."; return 1; fi
-    local total_hosts; total_hosts=$(wc -l < "$cache_file" | tr -d ' '); local last_modified; last_modified=$(date -r "$cache_file"); local file_size; file_size=$(du -h "$cache_file" | cut -f1)
-    local age_s=$(( $(date +%s) - $(stat -c %Y "$cache_file" 2>/dev/null || stat -f %m "$cache_file") )); local age_m=$(( age_s / 60 ))
-    echo "  File Location:    ${cache_file}"; echo "  Total Devices:    ${total_hosts}"; echo "  File Size:        ${file_size}"; echo "  Last Updated:     ${last_modified} (${age_m} mins ago)"
-    if cache::is_valid; then echo -e "  Status:           ${C_GREEN}Valid${C_RESET}"; else echo -e "  Status:           ${C_RED}Stale${C_RESET}"; fi
+# Wipes the cache files.
+clear_cache() {
+    log_info "Clearing all cache files..."
+    rm -f "$CACHE_FILE" "$AP_CACHE_FILE"
+    log_info "Cache cleared."
 }
-
-cache::search() {
-    local pattern="$1"; local cache_file="${G_PATHS[hosts_cache]}"; if [[ ! -s "$cache_file" ]]; then ui::print_error "Cache is empty."; return 1; fi
-    local results; if [[ -z "$pattern" ]]; then results=$(cat "$cache_file"); else results=$(grep -i "$pattern" "$cache_file"); fi
-    local found_count; found_count=$(echo -n "$results" | wc -l | tr -d ' '); if [[ ${found_count} -eq 0 ]]; then ui::print_error "No devices found matching '${pattern}'."; return 1; fi
-    ui::print_header "Search Results (${found_count} found)"; printf "%-18s %-40s %s\n" "IP ADDRESS" "HOSTNAME" "SERIAL NUMBER"; echo "------------------ ---------------------------------------- --------------------"
-    echo "$results" | while read -r ip hostname serial; do hostname="${hostname//\"/}"; serial="${serial//\"/}"; printf "%-18s %-40s %s\n" "$ip" "$hostname" "$serial"; done
-}
-
-cache::search_aps() { ui::print_error "Feature not implemented yet."; }

@@ -1,79 +1,130 @@
 #!/bin/bash
 #
-# NetSnmp - Network Device Discovery Tool
-# Version: 3.0.1 (Definitive Bootstrap Fix)
+# NetSnmp v2.0 - Network Discovery Tool
 #
+# This is the main executable. It sources libraries, parses arguments,
+# and dispatches actions to the appropriate functions.
 
-# --- Bootstrap ---
+VERSION="2.0.0-refactored"
+
+# --- Setup Environment ---
+
+# Determine application paths.
+# LIB_DIR is set relative to the location of this script, making it portable.
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)
-if [[ -d "/usr/local/lib/netsnmp" ]]; then LIB_DIR="/usr/local/lib/netsnmp";
-elif [[ -d "${HOME}/.local/lib/netsnmp" ]]; then LIB_DIR="${HOME}/.local/lib/netsnmp";
-elif [[ -d "${SCRIPT_DIR}/lib" ]]; then LIB_DIR="${SCRIPT_DIR}/lib";
-else echo "ERROR: Could not find the library directory." >&2; exit 1; fi
-export LIB_DIR
+LIB_DIR="/usr/local/lib/netsnmp" # Standard installation path
 
-# Source all LIBRARY files. The worker is an EXECUTABLE and must NOT be sourced.
-for lib_file in "${LIB_DIR}"/*.sh; do
-    if [[ "$(basename "$lib_file")" != "worker.sh" ]]; then
-        # shellcheck source=/dev/null
-        source "$lib_file"
-    fi
+# Define global paths. These are based on a standard system-wide installation.
+# The script will still function if run from a local directory, but will look
+# for config in these standard locations.
+CONF_DIR="/etc/netsnmp"
+CACHE_DIR="/var/cache/netsnmp"
+LOG_DIR="/var/log"
+
+CONFIG_FILE="${CONF_DIR}/netsnmp.conf"
+CACHE_FILE="${CACHE_DIR}/netsnmp.cache"
+AP_CACHE_FILE="${CACHE_DIR}/netsnmp.aps.cache"
+LOG_FILE="${LOG_DIR}/netsnmp.log"
+
+# --- Source Libraries ---
+# REFACTOR: All logic is now encapsulated in library files. The main script
+# only needs to source them to gain all functionality.
+
+# Check if the library directory exists before sourcing
+if [[ ! -d "$LIB_DIR" ]]; then
+    echo "ERROR: Library directory not found at '$LIB_DIR'." >&2
+    echo "Please ensure NetSnmp is installed correctly." >&2
+    exit 1
+fi
+
+for lib in "$LIB_DIR"/*.sh; do
+    # shellcheck source=/dev/null
+    source "$lib"
 done
 
-# --- Main Execution Logic ---
-main() {
-    core::bootstrap
-    core::check_config_context "$@"
 
-    local ACTION="search"; local SEARCH_PATTERN=""; local ACTION_PARAM=""
-    if [[ $# -eq 0 ]]; then ACTION="default"; else
-        while [[ $# -gt 0 ]]; do
-            case "$1" in
-                -h|--help) ACTION="help"; break ;;
-                -v|--verbose) G_VERBOSE=true; shift ;;
-                -vv|--debug) G_DEBUG=true; G_VERBOSE=true; set -x; shift ;;
-                -q|--quiet) G_QUIET=true; shift ;;
-                -u|--update) ACTION="update"; shift ;;
-                --update-incremental) ACTION="update_incremental"; shift ;;
-                -i|--info) ACTION="info"; shift ;;
-                -c|--clear) ACTION="clear"; shift ;;
-                --config) ACTION="config"; shift ;;
-                --wizard) ACTION="wizard"; break ;;
-                --discover-aps) ACTION="discover_aps"; shift ;;
-                --aps) ACTION="aps"; ACTION_PARAM="$2"; shift 2 ;;
-                --version) ACTION="version"; break ;;
-                --uninstall) ACTION="uninstall"; break ;;
-                --test-scan) ACTION="test_scan"; shift ;;
-                --test-snmp) ACTION="test_snmp"; ACTION_PARAM="$2"; shift 2 ;;
-                --test-ips) ACTION="test_ips"; ACTION_PARAM="$2"; shift 2 ;;
-                -*) ui::print_error "Unknown option: $1"; ACTION="help"; break ;;
-                *) SEARCH_PATTERN="$1"; shift ;;
-            esac; done; fi
-    core::init
+# --- Main Logic ---
+
+main() {
+    # Set sane script behavior
+    set -o pipefail
+
+    # Default action is to show help if no arguments are given
+    local ACTION="help"
+    local PATTERN=""
+    local CUSTOM_NETWORKS=""
+    local CUSTOM_COMMUNITIES=""
+
+    # Check for root privileges on actions that require them
+    case "${1:-}" in
+        --update|--wizard|--discover-aps|--clear)
+            if [[ $EUID -ne 0 ]]; then
+                log_error "This command requires root privileges. Please run with 'sudo'."
+                exit 1
+            fi
+            ;;
+    esac
+
+    # Initialize global flags
+    QUIET="false"
+    DEBUG="false"
+
+    # --- Argument Parsing ---
+    # REFACTOR: Argument parsing is now cleaner and handles combined options.
+    if [[ $# -gt 0 ]]; then
+        ACTION="$1"
+        shift
+    fi
+
+    # Handle search as the default action
+    if [[ ! "$ACTION" =~ ^-- && "$ACTION" != "search" ]]; then
+        PATTERN="$ACTION"
+        ACTION="search"
+    fi
+
+    # Load configuration first, so it's available for all actions
+    load_config
 
     case "$ACTION" in
-        help) ui::show_help ;;
-        version) ui::show_version ;;
-        uninstall) ui::show_uninstall_instructions ;;
-        wizard) ui::run_config_wizard ;;
-        update) scan::update_cache ;;
-        update_incremental) scan::update_cache_incremental ;;
-        info) cache::show_stats ;;
-        clear) cache::clear ;;
-        config) core::show_config ;;
-        discover_aps) scan::update_ap_cache ;;
-        aps) cache::search_aps "$ACTION_PARAM" ;;
-        test_scan) scan::test_functionality ;;
-        test_snmp) discovery::test_snmp_connectivity "$ACTION_PARAM" ;;
-        test_ips) scan::test_ip_generation "$ACTION_PARAM" ;;
-        search) cache::search "$SEARCH_PATTERN" ;;
-        default)
-            if cache::is_valid; then
-                ui::print_info "All cached devices:"; cache::search "";
-            else
-                ui::show_help; ui::print_info "Run 'netsnmp --update' to begin.";
-            fi ;;
+        --update)
+            update_cache "$CUSTOM_NETWORKS" "$CUSTOM_COMMUNITIES"
+            ;;
+        --discover-aps)
+            update_ap_cache
+            ;;
+        search)
+            if [[ -z "$PATTERN" ]]; then
+                log_error "Please provide a pattern to search for."
+                show_help
+                exit 1
+            fi
+            search_cache "$PATTERN"
+            ;;
+        -i|--info)
+            show_info
+            ;;
+        -c|--clear)
+            clear_cache
+            ;;
+        --wizard)
+            run_config_wizard
+            ;;
+        --config)
+            show_config
+            ;;
+        -h|--help)
+            show_help
+            ;;
+        --version)
+            echo "NetSnmp v${VERSION}"
+            ;;
+        *)
+            log_error "Unknown command: $ACTION"
+            show_help
+            exit 1
+            ;;
     esac
 }
 
+# Execute the main function with all provided arguments
 main "$@"

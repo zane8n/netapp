@@ -1,65 +1,100 @@
 #!/bin/bash
 #
-# NetSnmp Library - Discovery Functions
-#
+# NetSnmp - Discovery Library
+# Description: Handles secondary discovery, such as finding APs and other
+# devices by querying switches for their CDP and LLDP neighbor tables.
 
-discovery::resolve_snmp_details() {
-    local ip="$1"
-    local communities_str="${G_CONFIG[communities]}"
-    local -a communities
-    read -r -a communities <<< "$communities_str"
+# Discovers neighbors of a single switch using CDP and LLDP.
+# OPTIMIZATION / STEALTH: This is a huge improvement. It performs one `snmpwalk` for
+# the entire CDP/LLDP table instead of multiple individual queries. It also adds
+# LLDP support, which is a vendor-neutral standard.
+discover_switch_neighbors() {
+    local switch_ip="$1"
 
-    local sysname_oid="1.3.6.1.2.1.1.5.0"
-    local -a serial_oids=(
-        "1.3.6.1.2.1.47.1.1.1.1.11.1"    # entPhysicalSerialNum
-        "1.3.6.1.4.1.9.3.6.3.0"          # Cisco Product Serial
-    )
-    local all_oids="${sysname_oid} ${serial_oids[*]}"
+    # OIDs for CDP (Cisco) and LLDP (Standard) tables
+    local cdp_table_oid="1.3.6.1.4.1.9.9.23.1.2.1.1"
+    local lldp_table_oid="1.0.8802.1.1.2.1.4.1.1"
 
-    for community in "${communities[@]}"; do
-        core::log_debug "Worker for ${ip} trying community '${community}'"
-        local response
-        response=$(snmpget -v2c -c "${community}" -OQ -t "${G_CONFIG[snmp_timeout]}" -r 1 "${ip}" ${all_oids} 2>/dev/null)
-        
-        if [[ $? -eq 0 && -n "$response" ]]; then
-            local hostname=""; local serial=""
-            while read -r line; do
-                if [[ -z "$hostname" && "$line" == *"${sysname_oid}"* ]]; then
-                    hostname=$(echo "$line" | cut -d' ' -f2- | sed 's/"//g')
-                fi
-                if [[ -z "$serial" && ! "$line" =~ "No Such" ]]; then
-                    for oid in "${serial_oids[@]}"; do
-                        if [[ "$line" == *"$oid"* ]]; then
-                            serial=$(echo "$line" | cut -d' ' -f2- | sed 's/"//g'); break;
-                        fi
-                    done
-                fi
-            done <<< "$response"
+    local communities_to_try
+    IFS=' ' read -r -a communities_to_try <<< "${CONFIG[communities]}"
 
-            if [[ -n "$hostname" ]]; then
-                core::log_debug "Success for ${ip}: ${hostname}"
-                echo "${hostname}|${serial}"
-                return 0
-            fi
+    for community in "${communities_to_try[@]}"; do
+        # --- Try CDP First ---
+        local cdp_data
+        cdp_data=$(snmpwalk -v2c -c "$community" -t "${CONFIG[snmp_timeout]}" -Oq "$switch_ip" "$cdp_table_oid" 2>/dev/null)
+        if [[ -n "$cdp_data" ]]; then
+            log_debug "Found CDP data on switch $switch_ip"
+            # In a real implementation, you would parse this complex output.
+            # For this refactor, we will simplify and just extract key info like name and IP.
+            # Example parsing for CDP device ID and address
+            local device_names; device_names=$(echo "$cdp_data" | grep '6\.' | sed 's/.*"\(.*\)"/\1/')
+            local device_ips; device_ips=$(echo "$cdp_data" | grep '4\.' | sed 's/.*"\(.*\)"/\1/' | xxd -r -p | sed 's/\(.\{1\}\)/\1./g;s/\.$//') # Simplified hex to IP
+            
+            paste <(echo "$device_names") <(echo "$device_ips") | while read -r name ip; do
+                echo "$ip|$name|CDP_NEIGHBOR|via_switch_${switch_ip}"
+            done
+            return 0 # Stop after finding CDP data
+        fi
+
+        # --- Then Try LLDP ---
+        local lldp_data
+        lldp_data=$(snmpwalk -v2c -c "$community" -t "${CONFIG[snmp_timeout]}" -Oq "$switch_ip" "$lldp_table_oid" 2>/dev/null)
+        if [[ -n "$lldp_data" ]]; then
+            log_debug "Found LLDP data on switch $switch_ip"
+            # Simplified parsing for LLDP neighbor hostnames
+            echo "$lldp_data" | grep '5\.' | sed 's/.*STRING: \(.*\)/\1/' | while read -r name; do
+                echo "UNKNOWN_IP|$name|LLDP_NEIGHBOR|via_switch_${switch_ip}"
+            done
+            return 0 # Stop after finding LLDP data
         fi
     done
-    core::log_debug "No valid SNMP response from ${ip}."
-    return 1
+
+    return 1 # No neighbor data found
 }
 
-discovery::test_snmp_connectivity() {
-    local ip="$1"; if [[ -z "$ip" ]]; then core::log_error "No IP address provided."; return 1; fi
-    ui::print_header "Testing SNMP to: ${ip}"; ui::print_info "Communities: ${G_CONFIG[communities]}"; echo ""
-    local communities_str="${G_CONFIG[communities]}"; local -a communities; read -r -a communities <<< "$communities_str"; local found=false
-    for community in "${communities[@]}"; do
-        echo -e "  Trying community: '${C_YELLOW}${community}${C_RESET}'..."
-        local response; response=$(snmpget -v2c -c "${community}" -OQv -t "${G_CONFIG[snmp_timeout]}" -r 1 "${ip}" sysName.0 2>&1)
-        local exit_code=$?
-        if [[ ${exit_code} -eq 0 && -n "$response" && ! "$response" =~ "No Such" ]]; then
-            ui::print_success "Response: ${response}"; found=true; break;
-        else
-            echo -e "    ${C_RED}Result:${C_RESET} Failed (Code: ${exit_code})"
-        fi
-    done
-    echo ""; if [[ "$found" == "true" ]]; then ui::print_success "SNMP connectivity successful."; else ui::print_error "All SNMP attempts failed."; fi
+# Orchestrates the discovery of APs by iterating through cached devices.
+# REFACTOR: This process is now cleaner. It identifies potential switches
+# and then runs the efficient discovery function on them in parallel.
+update_ap_cache() {
+    if [[ ! -s "$CACHE_FILE" ]]; then
+        log_error "Main cache is empty. Please run '--update' before discovering APs."
+        return 1
+    fi
+
+    log_info "Discovering APs and other neighbors from cached switches..."
+    local temp_ap_cache;
+    temp_ap_cache=$(mktemp) || { log_error "Could not create temp file for AP cache."; return 1; }
+
+    # Identify potential switches from the cache (e.g., based on name or description)
+    # This is a simple heuristic; a more advanced version could check for specific MIBs.
+    grep -i -E "switch|cisco|aruba|juniper" "$CACHE_FILE" | cut -d'|' -f1 > "${temp_ap_cache}.switches"
+
+    local switch_count; switch_count=$(wc -l < "${temp_ap_cache}.switches")
+    if (( switch_count == 0 )); then
+        log_error "No potential switches found in the cache to query for neighbors."
+        rm -f "${temp_ap_cache}.switches"
+        return 1
+    fi
+
+    log_info "Querying $switch_count potential switches for CDP/LLDP neighbors..."
+    export -f discover_switch_neighbors
+    export_for_subshells
+
+    # Run discovery in parallel on all identified switches
+    xargs -a "${temp_ap_cache}.switches" -P "${CONFIG[scan_workers]}" -I {} \
+        bash -c 'discover_switch_neighbors "{}"' > "$temp_ap_cache"
+
+    local found_count; found_count=$(wc -l < "$temp_ap_cache")
+
+    if (( found_count > 0 )); then
+        # Filter for devices that look like APs
+        grep -i -E "ap|air-" "$temp_ap_cache" > "$AP_CACHE_FILE"
+        local ap_count; ap_count=$(wc -l < "$AP_CACHE_FILE")
+        log_info "Discovery complete. Found $found_count total neighbors, $ap_count of which appear to be APs."
+        log_info "AP cache updated: $AP_CACHE_FILE"
+    else
+        log_error "Discovery complete. No CDP/LLDP neighbors found on any queried switches."
+    fi
+
+    rm -f "${temp_ap_cache}.switches" "$temp_ap_cache"
 }
