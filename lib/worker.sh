@@ -65,8 +65,27 @@ scan_single_ip() {
     local ip="$1"
     log_debug "Worker: Starting scan for $ip"
 
-    # STEALTH: Use a fast, single-packet ping. `fping` is preferred if available
-    # as it's designed for scanning and is more efficient.
+    # --- REVISED LOGIC ---
+    # We will now ALWAYS attempt an SNMP query. The ping is just for a preliminary
+    # check, but its failure will no longer prevent discovery. The SNMP response
+    # is the definitive test of whether a manageable device is online.
+
+    # 1. First, attempt the SNMP query directly.
+    log_debug "Worker: Attempting SNMP query on $ip..."
+    local details
+    details=$(get_device_details "$ip")
+
+    # 2. Check if the SNMP query was successful.
+    if [[ $? -eq 0 && -n "$details" ]]; then
+        log_debug "Worker: SNMP success for $ip. Device is manageable."
+        # The output from get_device_details is already formatted for the cache
+        echo "$details"
+        return 0
+    fi
+
+    # 3. If SNMP fails, then we can check ping as a last resort to see if the
+    #    host is online but just not responding to our SNMP communities.
+    log_debug "Worker: SNMP failed for $ip. Checking for basic ping response..."
     if is_command_available "fping"; then
         fping -c1 -t"${CONFIG[ping_timeout]}00" "$ip" &>/dev/null
     else
@@ -74,19 +93,9 @@ scan_single_ip() {
     fi
 
     if [[ $? -eq 0 ]]; then
-        log_debug "Worker: Ping success for $ip. Querying SNMP..."
-        local details
-        details=$(get_device_details "$ip")
-        if [[ $? -eq 0 ]]; then
-            log_debug "Worker: SNMP success for $ip."
-            # The output from get_device_details is already formatted for the cache
-            echo "$details"
-            return 0
-        else
-            log_debug "Worker: Ping success, but no SNMP response for $ip."
-        fi
+        log_debug "Worker: $ip is online (responds to ping) but not to SNMP."
     else
-        log_debug "Worker: No ping response from $ip."
+        log_debug "Worker: $ip is not responsive to SNMP or ping."
     fi
 
     return 1
