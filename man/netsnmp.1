@@ -1,114 +1,54 @@
-.TH netsnmp 1 "2025-09-20" "2.0.0" "NetSnmp User Manual"
-
+.TH netsnmp 1 "2025-09-23" "3.0.0" "NetSnmp User Manual"
 .SH NAME
 netsnmp \- A fast and efficient network device discovery tool
-
 .SH SYNOPSIS
 .B netsnmp
 [\fIOPTIONS\fR] [\fIPATTERN\fR]
-
 .SH DESCRIPTION
 .B netsnmp
-is a command-line tool designed to discover and inventory network devices using ICMP and SNMP protocols. It scans specified networks, queries devices for their hostname and serial number, and maintains a local cache for quick searching. The tool is optimized for performance and stealth, using \fBfping\fR for efficient host discovery and parallel processing for SNMP queries.
-
+is a command-line tool to discover and inventory network devices using ICMP and SNMP. It scans specified networks, queries devices for their hostname and serial number, and maintains a local cache for quick searching.
 .SH CORE COMMANDS
 .TP
 .BR \-u ", " \-\-update
-Performs a full scan of the networks defined in the configuration file. This command rebuilds the cache from scratch, removing any entries for devices that are no longer found. This is the primary command for populating the device database.
-.TP
-.BR \-\-update-incremental
-Performs an incremental scan. This command discovers devices and either adds them to the cache if they are new or updates their information if they already exist. Unlike a full update, it does not remove devices that are not found, preserving the cache history of temporarily offline devices.
+Performs a full scan of the configured networks and rebuilds the device cache from scratch.
 .TP
 .BR [PATTERN]
-If no other options are specified, the first argument is treated as a case-insensitive search pattern. \fBnetsnmp\fR will search its cache for any device whose IP address, hostname, or serial number contains the pattern. If no pattern is given, all devices in the cache are listed.
-
-.SH CACHE MANAGEMENT
-.TP
-.BR \-i ", " \-\-info
-Displays statistics about the device cache, including the file location, total number of hosts, file size, last modification time, and whether the cache is considered stale based on the configured TTL.
-.TP
-.BR \-c ", " \-\-clear
-Permanently deletes the device cache files. The cache will be empty until the next scan is run.
-
-.SH CONFIGURATION & UTILITIES
-.TP
-.BR \-\-config
-Displays the current configuration that \fBnetsnmp\fR is using, including all parameters loaded from the configuration file.
-.TP
-.BR \-\-wizard
-Starts an interactive configuration wizard that prompts the user for the most common settings (networks and SNMP communities) and saves them to the configuration file.
+Searches the cache for devices matching the pattern (IP, hostname, or serial). Lists all devices if no pattern is given.
+.SH OPTIONS
 .TP
 .BR \-h ", " \-\-help
-Displays a brief help message summarizing the available commands and options.
+Show the help message.
 .TP
-.BR \-v ", " \-\-verbose
-Enables verbose output, which provides more detailed step-by-step information about the tool's operations during a scan.
+.BR \-i ", " \-\-info
+Show cache statistics.
 .TP
-.BR \-\-version
-Prints the version of the \fBnetsnmp\fR tool.
-
-.SH DIAGNOSTICS
-The following options are provided to help diagnose issues with configuration or network connectivity.
+.BR \-c ", " \-\-clear
+Clear all cached data.
 .TP
-.BR \-\-test-scan
-Runs a quick self-check to verify that essential dependencies like \fBsnmpget\fR and \fBfping\fR are installed and that the current configuration is valid.
+.BR \-\-config
+Display the current configuration.
+.TP
+.BR \-\-wizard
+Run the interactive configuration wizard.
 .TP
 .BR \-\-test-snmp " \fIIP_ADDRESS\fR"
-Performs a direct SNMP query against a single target IP address using the configured communities. This is useful for confirming that a specific device is reachable and responding to SNMP.
-.TP
-.BR \-\-test-ips " \fINETWORK\fR"
-Generates and prints the full list of IP addresses for a given network string (e.g., 192.168.1.0/24 or 10.0.0.1-50). This helps verify that network definitions are being parsed correctly.
-
-.SH NETWORK FORMATS
-\fBnetsnmp\fR accepts the following formats in its configuration or command-line arguments:
-.TP
-.B CIDR Notation
-192.168.1.0/24 (scans .1 through .254)
-.TP
-.B IP Ranges
-10.0.0.1-100 (scans from .1 to .100 inclusive)
-.TP
-.B Single IP
-172.16.30.5 (scans only this IP)
-
+Test SNMP connectivity against a single target IP.
 .SH FILES
 .TP
 .B /etc/netsnmp/netsnmp.conf
-System-wide configuration file (used when run as root).
-.TP
-.B ~/.config/netsnmp/netsnmp.conf
-User-specific configuration file. Overrides the system-wide file if it exists.
+System-wide configuration file (used when run with sudo).
 .TP
 .B /var/cache/netsnmp/hosts.cache
 System-wide device cache file.
-.TP
-.B ~/.cache/netsnmp/hosts.cache
-User-specific device cache file.
-.TP
-.B /var/log/netsnmp.log
-System-wide log file.
-.TP
-.B ~/.cache/netsnmp.log
-User-specific log file.
-
 .SH EXAMPLES
 .TP
-.B netsnmp --update
+.B sudo netsnmp --wizard
+Configure the tool for the first time.
+.TP
+.B sudo netsnmp --update
 Scan the network and build the cache.
 .TP
-.B netsnmp cisco-switch-3F
-Search for a device with "cisco-switch-3F" in its name.
-.TP
-.B netsnmp 10.40.2.25
-Find the device with the specified IP address.
-.TP
-.B netsnmp --info
-Check the status of the local cache.
-
+.B netsnmp cisco-switch
+Search for a device.
 .SH AUTHOR
-Kikandi Safari Isaac
-
-.SH SEE ALSO
-.BR fping (8),
-.BR snmpget (1),
-.BR snmp.conf (5)
+Refactored by Gemini.

@@ -1,25 +1,26 @@
 # NetSnmp Configuration File
-#
 # This file contains the default settings for network scans.
-# You can edit it directly or run 'netsnmp --wizard'.
 
 subnets="192.168.1.0/24"
+
 communities="public"
+
 ping_timeout="1"
+
 snmp_timeout="2"
+
 scan_workers="25"
+
 cache_ttl="3600"
+
+# Delay in milliseconds between pings to reduce network noise (0 to disable).
 scan_delay="20"
+
 enable_logging="true"
 
-# --- Advanced Discovery ---
+# Space-separated list of neighbor discovery protocols to use. (cdp, lldp)
 discovery_protocols="cdp lldp"
 
-# --- Scan Strategy ---
-#
-# Defines the method used to discover live hosts.
-# "icmp": Fast. Pings all hosts first, then queries only the live ones with SNMP.
-#         This is the default but will fail if ICMP (ping) is blocked by a firewall.
-# "snmp": Robust. Skips the ping scan and attempts an SNMP query on every single IP.
-#         This is slower but is required for networks that block ICMP.
+# Scan strategy: "icmp" (ping first) or "snmp" (direct SNMP query).
+# Use "snmp" for networks that block ping.
 scan_mode="icmp"
