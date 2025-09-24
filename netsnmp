@@ -1,61 +1,82 @@
-# In /usr/local/bin/netsnmp
+#!/bin/bash
+#
+# NetSnmp v2.2 - Network Discovery Tool
+#
+# This is the main executable. It sources libraries, parses arguments,
+# and dispatches actions to the appropriate functions.
+
+VERSION="2.2.0-stable"
+
+# --- Pre-flight Checks ---
+
+# Enforce execution with Bash and check for minimum version 4 for associative arrays.
+if [ -z "$BASH_VERSION" ]; then
+    echo "Error: This script must be run with Bash." >&2
+    exit 1
+fi
+if (( ${BASH_VERSION%%.*} < 4 )); then
+    echo "Error: This script requires Bash version 4.0 or newer." >&2
+    exit 1
+fi
+
+# --- Setup Environment ---
+LIB_DIR="/usr/local/lib/netsnmp"
+
+CONF_DIR="/etc/netsnmp"
+CACHE_DIR="/var/cache/netsnmp"
+LOG_DIR="/var/log"
+
+CONFIG_FILE="${CONF_DIR}/netsnmp.conf"
+CACHE_FILE="${CACHE_DIR}/netsnmp.cache"
+AP_CACHE_FILE="${CACHE_DIR}/netsnmp.aps.cache"
+LOG_FILE="${LOG_DIR}/netsnmp.log"
+
+# Set script to exit on any error during setup.
+set -e
+
+# --- Source Libraries ---
+if [[ ! -d "$LIB_DIR" ]]; then
+    echo "ERROR: Library directory not found at '$LIB_DIR'." >&2
+    echo "Please ensure NetSnmp is installed correctly." >&2
+    exit 1
+fi
+
+for lib in "$LIB_DIR"/*.sh; do
+    # shellcheck source=/dev/null
+    source "$lib"
+done
+
+# After sourcing, we can disable exit-on-error to allow for custom error handling.
+set +e
 
 # --- Main Logic ---
 main() {
-    set -o pipefail
-
     # --- Robust Argument Parsing Loop ---
-    # REFACTOR: This loop correctly handles flags and options, solving the bug
-    # where '-v' was treated as a network.
-    local ACTION=""
-    local PATTERN=""
-    local CUSTOM_NETWORKS=""
-    local CUSTOM_COMMUNITIES=""
-    local TEST_IP=""
+    # REFACTOR: This is a standard, single-pass parser. It correctly handles flags
+    # and options without the logical errors of the previous version.
 
-    # If no args are given, default to help
+    # If no args are provided, show help and exit.
     if [[ $# -eq 0 ]]; then
         show_help
         exit 0
     fi
 
-    # First, find the main action (the first non-flag argument)
-    for arg in "$@"; do
-        if [[ ! "$arg" =~ ^- ]]; then
-            ACTION="$arg"
-            break
-        fi
-    done
+    # Load config first. It provides defaults.
+    load_config
 
-    # If no action is found, it must be a command like --update.
-    # The first argument is the most likely candidate.
-    if [[ -z "$ACTION" ]]; then
-        ACTION="$1"
-    fi
-    # If the action is not a known command, assume it's a search pattern.
-    case "$ACTION" in
-        --update|--discover-aps|--info|-i|--clear|-c|--wizard|--config|--help|-h|--version|--test-snmp)
-            # This is a valid command, do nothing.
-            ;;
-        *)
-            PATTERN="$ACTION"
-            ACTION="search"
-            ;;
-    esac
-
-    # Now, parse all arguments for flags and options
+    # Loop through all arguments
     while [[ $# -gt 0 ]]; do
-        case "$1" in
-            -S|--networks)
-                CUSTOM_NETWORKS="$2"
-                shift 2
-                ;;
-            -C|--communities)
-                CUSTOM_COMMUNITIES="$2"
-                shift 2
+        local arg="$1"
+        case "$arg" in
+            --update|--discover-aps|--wizard|--clear|--config|--info|-i|--help|-h|--version)
+                # This is a standalone command
+                local ACTION="$arg"
+                shift
                 ;;
             --test-snmp)
-                TEST_IP="$2"
+                # This command takes a value
+                local ACTION="$arg"
+                local TEST_IP="$2"
                 shift 2
                 ;;
             -v|--verbose)
@@ -65,19 +86,24 @@ main() {
             -vv|--debug)
                 DEBUG="true"
                 VERBOSE="true"
-                set -x # Enable shell tracing
+                set -x
                 shift
                 ;;
+            -*)
+                log_error "Unknown option: $arg"
+                show_help
+                exit 1
+                ;;
             *)
-                shift # Ignore known commands or the search pattern
+                # If it's not a flag, it must be a search pattern
+                local ACTION="search"
+                local PATTERN="$arg"
+                shift
                 ;;
         esac
     done
 
     # --- Action Dispatch ---
-    
-    # Load config after parsing args so debug flags are set.
-    load_config
 
     # Check for root privileges on actions that need it.
     case "$ACTION" in
@@ -90,30 +116,23 @@ main() {
     esac
 
     case "$ACTION" in
-        --update)
-            # Pass custom networks if they were provided, otherwise the function will use the config.
-            update_cache "$CUSTOM_NETWORKS" "$CUSTOM_COMMUNITIES"
-            ;;
-        search)
-            search_cache "$PATTERN"
-            ;;
-        --test-snmp)
-            test_snmp "$TEST_IP"
-            ;;
-        --config|--conf) # Added --conf as an alias
-            show_config
-            ;;
-        # --- Other cases remain the same ---
-        --discover-aps) update_ap_cache ;;
-        -i|--info) show_info ;;
-        -c|--clear) clear_cache ;;
-        --wizard) run_config_wizard ;;
-        -h|--help) show_help ;;
-        --version) echo "NetSnmp v${VERSION}" ;;
+        --update)           update_cache ;;
+        --discover-aps)     update_ap_cache ;;
+        --wizard)           run_config_wizard ;;
+        --clear)            clear_cache ;;
+        --config)           show_config ;;
+        --info|-i)          show_info ;;
+        --help|-h)          show_help ;;
+        --version)          echo "NetSnmp v${VERSION}" ;;
+        --test-snmp)        test_snmp "$TEST_IP" ;;
+        search)             search_cache "$PATTERN" ;;
         *)
-            log_error "Unknown command or pattern: $ACTION"
+            log_error "No command specified or action is unclear."
             show_help
             exit 1
             ;;
     esac
 }
+
+# Execute with error handling
+main "$@"
