@@ -1,74 +1,56 @@
 #!/bin/bash
 #
 # NetSnmp Uninstaller
-#
-# Removes all system-wide files and directories created by the installer.
-# Must be run with sudo.
 
 set -e
 
 # --- Configuration ---
-INSTALL_PREFIX="/usr/local"
-BIN_DIR="${INSTALL_PREFIX}/bin"
-LIB_DIR="${INSTALL_PREFIX}/lib/netsnmp"
-CONF_DIR="/etc/netsnmp"
-CACHE_DIR="/var/cache/netsnmp"
-LOG_FILE="/var/log/netsnmp.log"
-MAN_DIR="${INSTALL_PREFIX}/share/man/man1"
+readonly INSTALL_PREFIX="/usr/local"
+readonly BIN_DIR="${INSTALL_PREFIX}/bin"
+readonly LIB_DIR="${INSTALL_PREFIX}/lib/netsnmp"
+readonly MAN_DIR="${INSTALL_PREFIX}/share/man/man1"
+readonly CONFIG_DIR="/etc/netsnmp"
+readonly CACHE_DIR="/var/cache/netsnmp"
+readonly LOG_FILE="/var/log/netsnmp.log"
 
-TARGET_BINARY="${BIN_DIR}/netsnmp"
-
-# --- UI Functions ---
-info() { echo "INFO: $*"; }
-error() { echo "ERROR: $*" >&2; exit 1; }
-success() { echo "✅ SUCCESS: $*"; }
-warn() { echo "WARN: $*"; }
-
-
-# --- Helper Functions ---
-check_root() {
-    if [[ $EUID -ne 0 ]]; then
-        error "This uninstaller must be run as root. Please use 'sudo bash $0'."
-    fi
-}
-
-# --- Main Uninstallation Logic ---
+# --- Main Uninstallation ---
 main() {
-    echo "╔═════════════════════════════════════╗"
-    echo "║       NetSnmp Tool Uninstaller        ║"
-    echo "╚═════════════════════════════════════╝"
-    echo ""
-    read -p "This will remove all NetSnmp files. Are you sure? [y/N] " -n 1 -r
+    if [[ $EUID -ne 0 ]]; then
+        echo "ERROR: This uninstaller must be run with sudo or as root." >&2
+        exit 1
+    fi
+
+    echo "This will remove NetSnmp from your system."
+    read -p "Do you want to also remove configuration files in ${CONFIG_DIR}? [y/N] " -n 1 -r
     echo
-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-        echo "Uninstallation cancelled."
-        exit 0
-    fi
+    local remove_config=$REPLY
+    
+    read -p "Do you want to also remove cache and log files? [y/N] " -n 1 -r
+    echo
+    local remove_cache=$REPLY
 
-    check_root
+    echo "Uninstalling NetSnmp..."
 
-    info "Removing files and directories..."
-    rm -f "$TARGET_BINARY"
-    rm -rf "$LIB_DIR"
+    # Remove binary, lib, and man page
+    rm -f "${BIN_DIR}/netsnmp"
+    rm -rf "${LIB_DIR}"
     rm -f "${MAN_DIR}/netsnmp.1.gz"
+    echo "✓ Core files removed."
 
-    # Important: Only remove config/cache if they exist to avoid errors
-    if [ -d "$CONF_DIR" ]; then
-        # Check if user wants to keep configuration
-        read -p "Do you want to remove configuration files in ${CONF_DIR}? [y/N] " -n 1 -r
-        echo
-        if [[ $REPLY =~ ^[Yy]$ ]]; then
-            rm -rf "$CONF_DIR"
-            info "Removed configuration directory."
-        else
-            warn "Skipping configuration directory removal."
-        fi
+    # Conditionally remove config
+    if [[ $remove_config =~ ^[Yy]$ ]]; then
+        rm -rf "$CONFIG_DIR"
+        echo "✓ Configuration directory removed."
     fi
 
-    rm -rf "$CACHE_DIR"
-    rm -f "$LOG_FILE"
+    # Conditionally remove cache and logs
+    if [[ $remove_cache =~ ^[Yy]$ ]]; then
+        rm -rf "$CACHE_DIR"
+        rm -f "$LOG_FILE"
+        echo "✓ Cache and log files removed."
+    fi
 
-    success "Uninstallation complete."
+    echo -e "\n✅ Uninstallation complete."
 }
 
 main "$@"

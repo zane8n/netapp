@@ -1,92 +1,89 @@
 #!/bin/bash
 #
-# NetSnmp - Scan Library
-# Description: Contains high-level functions for orchestrating network scans.
+# NetSnmp Scan Library
+# Handles the actual network scanning logic.
 
-# Generates a list of individual IP addresses from various network formats.
-# REFACTOR: Removed faulty CIDR logic and strengthened the pure bash parsers.
-generate_ip_list() {
-    local network="$1"
-    log_debug "Generating IP list for network: '$network'"
-
-    # CIDR notation (e.g., 192.168.1.0/24)
-    if [[ "$network" == *"/"* ]]; then
-        local base="${network%/*}"
-        local mask="${network#*/}"
-        # This parser is intentionally simple and only supports the most common /24 case.
-        if [[ "$mask" == "24" && "$base" =~ ^([0-9]{1,3}\.){2}[0-9]{1,3}\.0$ ]]; then
-            local prefix="${base%.*}"
-            for i in {1..254}; do
-                echo "${prefix}.$i"
-            done
-        else
-            log_error "Invalid or unsupported CIDR format: '$network'. Only /24 subnets ending in .0 are supported."
-            return 1
-        fi
-
-    # IP Range (e.g., 10.0.0.50-100)
-    elif [[ "$network" =~ ^([0-9]+\.[0-9]+\.[0-9]+)\.([0-9]+)-([0-9]+)$ ]]; then
-        local base_net="${BASH_REMATCH[1]}"
-        local start="${BASH_REMATCH[2]}"
-        local end="${BASH_REMATCH[3]}"
-        if (( start > 254 || end > 254 || start == 0 || end == 0 || start > end )); then
-            log_error "Invalid IP range: '$network'. Octets must be 1-254 and start <= end."
-            return 1
-        fi
-        for ((i=start; i<=end; i++)); do
-            echo "${base_net}.$i"
-        done
-
-    # Single IP
-    elif [[ "$network" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
-        echo "$network"
+# Scans a single host and prints results to stdout.
+# Usage: scan::single_host <IP>
+function scan::single_host() {
+    local ip="$1"
+    core::log "INFO" "Scanning single host: ${ip}"
+    
+    local result; result=$(scan::worker "$ip")
+    if [[ -n "$result" ]]; then
+        core::log "RAW" "✓ Host Found:"
+        core::log "RAW" "  IP:       ${result%% *}"
+        core::log "RAW" "  Hostname: $(echo "$result" | awk '{print $2}')"
+        core::log "RAW" "  Serial:   $(echo "$result" | awk '{print $3}')"
     else
-        log_error "Invalid network format: '$network'."
-        return 1
+        core::log "WARN" "Host ${ip} is offline or not responding to SNMP."
     fi
 }
 
-# The main scanning orchestrator.
-# REFACTOR: Replaced xargs with a highly compatible and transparent bash job control loop.
-# This makes debugging worker failures impossible to ignore.
-run_parallel_scan() {
-    local network_list="$1"
-    local all_ips
-    all_ips=$(for network in $network_list; do generate_ip_list "$network"; done)
-
-    if [[ -z "$all_ips" ]]; then
-        log_error "No valid IPs were generated. Please check your config for typos in the network ranges."
-        return 1
+# The core worker function for scanning a single IP.
+# Returns "IP HOSTNAME SERIAL" on success, empty on failure.
+# Usage: scan::worker <IP>
+function scan::worker() {
+    local ip="$1"
+    
+    # Use fping if available (faster), otherwise fallback to ping.
+    if command -v fping &>/dev/null; then
+        fping -c1 -t"${CONFIG[ping_timeout]}00" "$ip" &>/dev/null || return 1
+    else
+        ping -c1 -W"${CONFIG[ping_timeout]}" "$ip" &>/dev/null || return 1
     fi
+    
+    core::log "DEBUG" "Ping success for ${ip}, trying SNMP."
 
-    local ip_count
-    ip_count=$(echo "$all_ips" | wc -l)
-    log_info "Scanning $ip_count total IPs across ${CONFIG[scan_workers]} parallel workers..."
+    for community in ${CONFIG[communities]}; do
+        # Optimization: Query for hostname and serial number in a single request.
+        local oids="sysName.0 1.3.6.1.2.1.47.1.1.1.1.11.1" # Standard Hostname and Serial OID
+        local snmp_result; snmp_result=$(snmpget -v2c -c "$community" -Oqv -t "${CONFIG[snmp_timeout]}" "$ip" $oids 2>/dev/null)
+        
+        # Check if we got a valid response (not timeout or error).
+        if [[ $? -eq 0 ]] && [[ -n "$snmp_result" ]]; then
+            # The result will be multi-line, process it.
+            local hostname; hostname=$(echo "$snmp_result" | head -n1 | tr -d '\r\n"')
+            local serial; serial=$(echo "$snmp_result" | tail -n1 | tr -d '\r\n"')
+            
+            # Sanitize output. If serial is not found, it might echo the OID.
+            [[ "$serial" == "No Such Instance"* ]] && serial=""
 
-    # Export all necessary functions and variables for the sub-processes.
-    export_for_subshells
+            echo "$ip $hostname $serial"
+            return 0 # Success, stop trying communities.
+        fi
+    done
 
-    # --- Parallel Execution via Bash Job Control (Batch Method) ---
+    return 1 # No SNMP response with any community.
+}
+
+# Scans a full network in parallel.
+# Usage: scan::network <NETWORK_DEFINITION>
+function scan::network() {
+    local network="$1"
+    core::log "VERBOSE" "Generating IP list for network: ${network}"
+    
+    local ip_list; ip_list=$(core::generate_ip_list "$network")
+    [[ $? -ne 0 || -z "$ip_list" ]] && core::log "ERROR" "Failed to generate IPs for ${network}." && return 1
+
+    local ip_count; ip_count=$(echo "$ip_list" | wc -l)
+    core::log "INFO" "Scanning ${ip_count} IPs in ${network} with ${CONFIG[scan_workers]} workers..."
+
+    # Export functions and variables needed by the subshells.
+    export -f scan::worker core::log
+    export -A CONFIG
+    export LOG_LEVEL
+
     local counter=0
-    while read -r ip; do
-        # Skip any empty lines that might have been generated
-        [[ -z "$ip" ]] && continue
-
-        # Run the worker function in the background for each IP.
-        # Any errors from scan_single_ip will now print directly to your screen.
-        scan_single_ip "$ip" &
-
+    echo "$ip_list" | while read -r ip; do
+        # Run worker in the background.
+        ( scan::worker "$ip" ) &
+        
+        # Simple parallel throttle.
         ((counter++))
-
-        # When we reach the batch size, wait for all jobs in the current batch
-        # to finish before starting the next one. This is simple and reliable.
         if (( counter % ${CONFIG[scan_workers]} == 0 )); then
             wait
-            log_debug "Finished a batch of ${CONFIG[scan_workers]} workers."
         fi
-    done <<< "$all_ips"
-
-    # Final wait for any remaining jobs in the last, incomplete batch.
-    wait
-    log_debug "All scan workers have completed."
+    done
+    wait # Wait for the last batch of jobs to finish.
 }

@@ -1,125 +1,76 @@
 #!/bin/bash
 #
 # NetSnmp Installer
-#
-# Installs the NetSnmp tool, libraries, configuration, and man page.
-# Must be run with sudo for system-wide installation.
+# Installs the modular version of the NetSnmp tool.
 
 set -e
 
 # --- Configuration ---
-INSTALL_PREFIX="/usr/local"
-BIN_DIR="${INSTALL_PREFIX}/bin"
-LIB_DIR="${INSTALL_PREFIX}/lib/netsnmp"
-CONF_DIR="/etc/netsnmp"
-CACHE_DIR="/var/cache/netsnmp"
-LOG_DIR="/var/log"
-MAN_DIR="${INSTALL_PREFIX}/share/man/man1"
+readonly INSTALL_PREFIX="/usr/local"
+readonly BIN_DIR="${INSTALL_PREFIX}/bin"
+readonly LIB_DIR="${INSTALL_PREFIX}/lib/netsnmp"
+readonly MAN_DIR="${INSTALL_PREFIX}/share/man/man1"
+readonly CONFIG_DIR="/etc/netsnmp"
+readonly CACHE_DIR="/var/cache/netsnmp"
+readonly LOG_DIR="/var/log"
 
-TARGET_BINARY="${BIN_DIR}/netsnmp"
+# --- Main Installation ---
+main() {
+    if [[ $EUID -ne 0 ]]; then
+        echo "ERROR: This installer must be run with sudo or as root." >&2
+        exit 1
+    fi
 
-# --- UI Functions ---
-info() { echo "INFO: $*"; }
-error() { echo "ERROR: $*" >&2; exit 1; }
-success() { echo "✅ SUCCESS: $*"; }
+    echo "Starting NetSnmp installation..."
+
+    # 1. Detect dependencies
+    detect_dependencies
+
+    # 2. Create directories
+    echo "Creating directories..."
+    mkdir -p "$BIN_DIR" "$LIB_DIR" "$MAN_DIR" "$CONFIG_DIR" "$CACHE_DIR" "$LOG_DIR"
+    echo "✓ Directories created."
+
+    # 3. Install files (assuming they are in the same directory as install.sh)
+    echo "Installing application files..."
+    install -m 755 netsnmp "$BIN_DIR/"
+    install -m 644 lib/*.sh "$LIB_DIR/"
+    echo "✓ Scripts installed."
+
+    # 4. Install config template
+    if [ ! -f "${CONFIG_DIR}/netsnmp.conf" ]; then
+        install -m 644 conf/netsnmp.conf.template "${CONFIG_DIR}/netsnmp.conf"
+        echo "✓ Default configuration installed."
+    else
+        echo "ⓘ Existing configuration found. Skipping template installation."
+    fi
+
+    # 5. Install man page
+    install -m 644 man/netsnmp.1 "${MAN_DIR}/"
+    gzip -f "${MAN_DIR}/netsnmp.1"
+    echo "✓ Man page installed."
+
+    echo -e "\n✅ Installation successful!"
+    echo "   Run 'netsnmp --help' to get started."
+    echo "   Run 'netsnmp --wizard' to configure."
+}
 
 # --- Helper Functions ---
-check_root() {
-    if [[ $EUID -ne 0 ]]; then
-        error "This installer must be run as root. Please use 'sudo bash $0'."
+detect_dependencies() {
+    echo "Checking for dependencies (snmp-tools, iputils)..."
+    local missing=""
+
+    command -v snmpget &>/dev/null || missing+=" snmp-tools"
+    command -v ping &>/dev/null || missing+=" iputils"
+
+    if [[ -n "$missing" ]]; then
+        echo "ERROR: Missing dependencies:$missing" >&2
+        echo "Please install them using your package manager." >&2
+        echo "  e.g., sudo apt install snmp iputils-ping" >&2
+        echo "  e.g., sudo dnf install net-snmp-utils iputils" >&2
+        exit 1
     fi
-}
-
-detect_package_manager() {
-    if command -v apt-get >/dev/null; then echo "apt-get";
-    elif command -v dnf >/dev/null; then echo "dnf";
-    elif command -v yum >/dev/null; then echo "yum";
-    elif command -v pacman >/dev/null; then echo "pacman";
-    elif command -v zypper >/dev/null; then echo "zypper";
-    else echo "unknown"; fi
-}
-
-install_dependencies() {
-    local pm
-    pm=$(detect_package_manager)
-    info "Detected package manager: ${pm}"
-    info "Installing dependencies (net-snmp-utils, iputils)..."
-
-    case "$pm" in
-        apt-get) sudo apt-get update && sudo apt-get install -y snmp iputils-ping ;;
-        dnf|yum) sudo "$pm" install -y net-snmp-utils iputils ;;
-        pacman) sudo pacman -Sy --noconfirm net-snmp iputils ;;
-        zypper) sudo zypper install -y net-snmp iputils ;;
-        *)
-            echo "WARNING: Could not determine package manager."
-            echo "Please ensure the following are installed manually:"
-            echo "  - snmpwalk, snmpget (from a package like 'net-snmp-utils')"
-            echo "  - ping (from a package like 'iputils')"
-            read -p "Press [Enter] to continue..."
-            ;;
-    esac
-}
-
-# --- Main Installation Logic ---
-create_directories() {
-    info "Creating required directories..."
-    mkdir -p "$BIN_DIR"
-    mkdir -p "$LIB_DIR"
-    mkdir -p "$CONF_DIR"
-    mkdir -p "$CACHE_DIR"
-    mkdir -p "$MAN_DIR"
-}
-
-install_files() {
-    info "Installing application files..."
-    # Ensure source files are in the same directory as the installer
-    cd "$(dirname "$0")"
-
-    install -m 755 netsnmp "$TARGET_BINARY"
-    # Copy all library scripts
-    for lib_file in lib/*.sh; do
-        install -m 644 "$lib_file" "$LIB_DIR/"
-    done
-}
-
-install_config() {
-    info "Installing configuration template..."
-    if [[ ! -f "${CONF_DIR}/netsnmp.conf" ]]; then
-        install -m 644 "conf/netsnmp.conf.template" "${CONF_DIR}/netsnmp.conf"
-    else
-        info "Existing configuration found. Skipping template installation."
-    fi
-}
-
-install_man_page() {
-    info "Installing man page..."
-    gzip -c "man/netsnmp.1" > "${MAN_DIR}/netsnmp.1.gz"
-    chmod 644 "${MAN_DIR}/netsnmp.1.gz"
-}
-
-# --- Main Execution ---
-main() {
-    echo "╔══════════════════════════════════╗"
-    echo "║       NetSnmp Tool Installer       ║"
-    echo "╚══════════════════════════════════╝"
-    echo ""
-
-    check_root
-    install_dependencies
-    create_directories
-    install_files
-    install_config
-    install_man_page
-
-    echo ""
-    success "Installation complete!"
-    echo ""
-    echo "Next Steps:"
-    echo "1. Configure the tool by editing: ${CONF_DIR}/netsnmp.conf"
-    echo "   Or run the configuration wizard: sudo netsnmp --wizard"
-    echo "2. Run your first scan:             sudo netsnmp --update"
-    echo "3. Search the cache:                netsnmp switch01"
-    echo "4. To uninstall, run the 'uninstall.sh' script from this directory."
+    echo "✓ Dependencies are satisfied."
 }
 
 main "$@"

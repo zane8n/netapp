@@ -1,138 +1,72 @@
 #!/bin/bash
 #
-# NetSnmp v2.2 - Network Discovery Tool
-#
-# This is the main executable. It sources libraries, parses arguments,
-# and dispatches actions to the appropriate functions.
+# NetSnmp - Network Device Discovery Tool
+# Version 2.0.0 (Refactored)
+# Main entry point for the application.
 
-VERSION="2.2.0-stable"
+set -o errexit
+set -o nounset
+set -o pipefail
 
-# --- Pre-flight Checks ---
+# --- Library Sourcing ---
+# The LIB_DIR is set by the installer.
+readonly LIB_DIR="/usr/local/lib/netsnmp"
 
-# Enforce execution with Bash and check for minimum version 4 for associative arrays.
-if [ -z "$BASH_VERSION" ]; then
-    echo "Error: This script must be run with Bash." >&2
-    exit 1
-fi
-if (( ${BASH_VERSION%%.*} < 4 )); then
-    echo "Error: This script requires Bash version 4.0 or newer." >&2
-    exit 1
-fi
+# Source all library files. Order matters for dependencies.
+source "${LIB_DIR}/core.sh"
+source "${LIB_DIR}/ui.sh"
+source "${LIB_DIR}/cache.sh"
+source "${LIB_DIR}/scan.sh"
+source "${LIB_DIR}/discovery.sh"
 
-# --- Setup Environment ---
-LIB_DIR="/usr/local/lib/netsnmp"
-
-CONF_DIR="/etc/netsnmp"
-CACHE_DIR="/var/cache/netsnmp"
-LOG_DIR="/var/log"
-
-CONFIG_FILE="${CONF_DIR}/netsnmp.conf"
-CACHE_FILE="${CACHE_DIR}/netsnmp.cache"
-AP_CACHE_FILE="${CACHE_DIR}/netsnmp.aps.cache"
-LOG_FILE="${LOG_DIR}/netsnmp.log"
-
-# Set script to exit on any error during setup.
-set -e
-
-# --- Source Libraries ---
-if [[ ! -d "$LIB_DIR" ]]; then
-    echo "ERROR: Library directory not found at '$LIB_DIR'." >&2
-    echo "Please ensure NetSnmp is installed correctly." >&2
-    exit 1
-fi
-
-for lib in "$LIB_DIR"/*.sh; do
-    # shellcheck source=/dev/null
-    source "$lib"
-done
-
-# After sourcing, we can disable exit-on-error to allow for custom error handling.
-set +e
-
-# --- Main Logic ---
+# --- Main Execution Logic ---
 main() {
-    # --- Robust Argument Parsing Loop ---
-    # REFACTOR: This is a standard, single-pass parser. It correctly handles flags
-    # and options without the logical errors of the previous version.
+    # Initialize configuration (sets paths, loads .conf file).
+    # Prompts for wizard automatically if config is missing.
+    core::init_config
 
-    # If no args are provided, show help and exit.
-    if [[ $# -eq 0 ]]; then
-        show_help
-        exit 0
-    fi
+    # Argument parsing
+    local action="search"
+    local pattern=""
+    local custom_networks=""
+    local custom_communities=""
 
-    # Load config first. It provides defaults.
-    load_config
+    [[ $# -eq 0 ]] && action="search" && pattern="" # Default action: list all
 
-    # Loop through all arguments
     while [[ $# -gt 0 ]]; do
-        local arg="$1"
-        case "$arg" in
-            --update|--discover-aps|--wizard|--clear|--config|--info|-i|--help|-h|--version)
-                # This is a standalone command
-                local ACTION="$arg"
-                shift
-                ;;
-            --test-snmp)
-                # This command takes a value
-                local ACTION="$arg"
-                local TEST_IP="$2"
-                shift 2
-                ;;
-            -v|--verbose)
-                VERBOSE="true"
-                shift
-                ;;
-            -vv|--debug)
-                DEBUG="true"
-                VERBOSE="true"
-                set -x
-                shift
-                ;;
-            -*)
-                log_error "Unknown option: $arg"
-                show_help
-                exit 1
-                ;;
-            *)
-                # If it's not a flag, it must be a search pattern
-                local ACTION="search"
-                local PATTERN="$arg"
-                shift
-                ;;
+        case "$1" in
+            -h|--help)              ui::show_help; exit 0 ;;
+            -u|--update)            action="update" ;;
+            -i|--info)              action="info" ;;
+            -c|--clear)             action="clear" ;;
+            --discover-aps)         action="discover_aps" ;;
+            --wizard)               action="wizard" ;;
+            -v|--verbose)           core::set_log_level "VERBOSE" ;;
+            -vv|--debug)            core::set_log_level "DEBUG" ;;
+            -s|--scan)              action="scan_single"; pattern="${2-}"; shift ;;
+            -S|--networks)          custom_networks="${2-}"; shift ;;
+            -C|--communities)       custom_communities="${2-}"; shift ;;
+            -*)                     core::log "ERROR" "Unknown option: $1"; exit 1 ;;
+            *)                      pattern="$1" ;;
         esac
+        shift
     done
-
-    # --- Action Dispatch ---
-
-    # Check for root privileges on actions that need it.
-    case "$ACTION" in
-        --update|--wizard|--discover-aps|--clear)
-            if [[ $EUID -ne 0 ]]; then
-                log_error "This command requires root privileges. Please run with 'sudo'."
-                exit 1
-            fi
+    
+    # Execute the determined action
+    case "$action" in
+        update)         cache::update "$custom_networks" "$custom_communities" ;;
+        info)           ui::show_info ;;
+        clear)          cache::clear ;;
+        discover_aps)   discovery::update_ap_cache ;;
+        scan_single)
+            [[ -z "$pattern" ]] && core::log "ERROR" "No IP specified for --scan." && exit 1
+            scan::single_host "$pattern"
             ;;
-    esac
-
-    case "$ACTION" in
-        --update)           update_cache ;;
-        --discover-aps)     update_ap_cache ;;
-        --wizard)           run_config_wizard ;;
-        --clear)            clear_cache ;;
-        --config)           show_config ;;
-        --info|-i)          show_info ;;
-        --help|-h)          show_help ;;
-        --version)          echo "NetSnmp v${VERSION}" ;;
-        --test-snmp)        test_snmp "$TEST_IP" ;;
-        search)             search_cache "$PATTERN" ;;
-        *)
-            log_error "No command specified or action is unclear."
-            show_help
-            exit 1
-            ;;
+        wizard)         ui::run_config_wizard ;;
+        search)         cache::search "$pattern" ;;
+        *)              core::log "ERROR" "Internal error: Unhandled action '$action'."; exit 1 ;;
     esac
 }
 
-# Execute with error handling
+# --- Entry Point ---
 main "$@"
